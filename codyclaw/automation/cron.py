@@ -137,12 +137,15 @@ class CronScheduler:
 
     @staticmethod
     def _parse_interval(schedule: str) -> int:
-        """解析简单间隔描述为分钟数"""
+        """解析简单间隔描述为分钟数。格式不合法时回退为 60 分钟。"""
         schedule = schedule.lower().replace("every", "").strip()
-        if schedule.endswith("h"):
-            return int(schedule[:-1]) * 60
-        elif schedule.endswith("m"):
-            return int(schedule[:-1])
-        elif schedule.isdigit():
-            return int(schedule)
+        try:
+            if schedule.endswith("h"):
+                return int(schedule[:-1]) * 60
+            elif schedule.endswith("m"):
+                return int(schedule[:-1])
+            elif schedule.isdigit():
+                return int(schedule)
+        except ValueError:
+            logger.warning(f"Invalid interval format '{schedule}', defaulting to 60 minutes")
         return 60  # 默认 1 小时

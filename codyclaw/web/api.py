@@ -256,16 +256,27 @@ async def chat_send(req: Request):
 
 @router.get("/chat/history")
 async def chat_history(
+    req: Request,
     agent_id: str = "",
     session_key: str = "",
     limit: int = 50,
 ):
-    """获取聊天历史记录。"""
-    messages = _chat_history
+    """获取聊天历史记录。优先返回内存数据，回退到 DB。"""
+    messages = list(_chat_history)
     if agent_id:
         messages = [m for m in messages if m["agent_id"] == agent_id]
     if session_key:
         messages = [m for m in messages if m["session_key"] == session_key]
+
+    # 内存无数据时回退到 DB 查询
+    if not messages:
+        db_path = req.app.state.config.db_path
+        if db_path:
+            from codyclaw.db import load_chat_messages
+            messages = load_chat_messages(
+                db_path, agent_id=agent_id, session_key=session_key, limit=limit
+            )
+
     return {"messages": messages[-limit:]}
 
 

@@ -331,7 +331,7 @@ class AgentDispatcher:
         """供管理 API 使用"""
         return self._sessions.all()
 
-    def get_session(self, key: str) -> str | None:
+    def get_session(self, key: str) -> Optional[str]:
         """获取指定 key 的 session_id"""
         return self._sessions.get(key)
 
