@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Optional
 
@@ -37,8 +38,8 @@ class LarkChannelImpl(LarkChannel):
         self.config = config
         self._handlers: list[MessageHandler] = []
         self._ws_client = None
-        self._ws_future = None  # executor future，用于错误监控和 stop()
-        self._last_error: Optional[str] = None  # 最后一次连接错误
+        self._ws_thread: Optional[threading.Thread] = None
+        self._last_error: Optional[str] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._user_name_cache: OrderedDict[str, str] = OrderedDict()  # open_id → name（LRU）
 
@@ -66,32 +67,27 @@ class LarkChannelImpl(LarkChannel):
             self._on_message_event(ctx, event), self._loop
         )
 
-    def _on_ws_done(self, future) -> None:
-        """WebSocket 线程结束回调，记录异常。"""
-        if future.cancelled():
-            logger.info("WebSocket connection cancelled (normal shutdown)")
-            self._last_error = None
-            return
-        exc = future.exception()
-        if exc is not None:
-            self._last_error = str(exc)
-            logger.error(f"WebSocket connection terminated with error: {exc}")
-        else:
-            self._last_error = None
-            logger.info("WebSocket connection closed")
-
-    def _run_ws_blocking(self) -> None:
+    def _run_ws_in_thread(self) -> None:
         """在独立线程中运行 lark WebSocket 客户端。
 
-        lark SDK 的 start() 内部会创建/使用 asyncio 事件循环。
-        必须为线程设置一个全新的 event loop，否则会和主线程的 uvicorn loop 冲突
-        （'this event loop is already running' 错误）。
+        必须创建全新的 event loop 并 set 为当前线程的 loop，
+        否则 lark SDK 内部的 asyncio 调用会与主线程的 uvicorn loop 冲突。
+        使用 threading.Thread（非 run_in_executor）彻底隔离。
         """
-        asyncio.set_event_loop(asyncio.new_event_loop())
-        self._ws_client.start()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            self._ws_client.start()
+        except Exception as e:
+            self._last_error = str(e)
+            logger.error(f"WebSocket connection terminated with error: {e}")
+        else:
+            self._last_error = None
+            logger.info("WebSocket connection closed normally")
+        finally:
+            loop.close()
 
     async def start(self) -> None:
-        # 保存事件循环引用，供 _sync_on_message_event 跨线程使用
         self._loop = asyncio.get_running_loop()
 
         self._ws_client = lark.ws.Client(
@@ -100,21 +96,21 @@ class LarkChannelImpl(LarkChannel):
             event_handler=self._event_handler,
             log_level=lark.LogLevel.WARNING,
         )
-        # start() 是阻塞调用，放到线程池并给线程一个独立的 event loop
-        self._ws_future = self._loop.run_in_executor(None, self._run_ws_blocking)
-        self._ws_future.add_done_callback(self._on_ws_done)
+        # 用独立 daemon 线程（非 run_in_executor），彻底隔离 event loop
+        self._ws_thread = threading.Thread(
+            target=self._run_ws_in_thread, daemon=True, name="lark-ws"
+        )
+        self._ws_thread.start()
 
     @property
     def is_connected(self) -> bool:
-        """WebSocket 是否处于连接状态。"""
-        return self._ws_future is not None and not self._ws_future.done()
+        """WebSocket 线程是否存活。"""
+        return self._ws_thread is not None and self._ws_thread.is_alive()
 
     async def stop(self) -> None:
         """关闭渠道连接"""
-        if self._ws_future is not None and not self._ws_future.done():
-            self._ws_future.cancel()
         self._ws_client = None
-        self._ws_future = None
+        self._ws_thread = None
 
     async def _fetch_user_name(self, open_id: str) -> str:
         """获取用户显示名，LRU 缓存（上限 1000 条）。失败时回退到 open_id。
