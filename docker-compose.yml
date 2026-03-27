@@ -1,0 +1,13 @@
+services:
+  codyclaw:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - codyclaw-data:/home/codyclaw/.codyclaw
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    restart: unless-stopped
+
+volumes:
+  codyclaw-data:

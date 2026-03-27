@@ -1,5 +1,9 @@
 # CodyClaw
 
+[![CI](https://github.com/CodyCodeAgent/codyclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/CodyCodeAgent/codyclaw/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+
 > 基于 Cody Agent Framework 构建的飞书驱动持久化 AI Agent 系统
 
 ## 什么是 CodyClaw？
@@ -141,6 +145,24 @@ codyclaw/
 | `GET /api/agents` | 已注册的 Agent 列表 |
 | `GET /api/cron` | 定时任务列表及下次执行时间 |
 | `GET /api/sessions` | 活跃会话列表 |
+| `GET /api/dashboard` | 仪表盘概览数据 |
+| `GET /api/skills` | 可用的 Skill 列表 |
+| `GET /api/config` | 当前配置（敏感字段掩码） |
+
+## Web 控制台
+
+启动后访问 `http://localhost:8080/` 即可打开 Web 管理控制台：
+
+| 页面 | 功能 |
+|------|------|
+| Dashboard | 概览面板（Agent、会话、Cron 状态） |
+| Chat | 实时对话 — 选择 Agent，SSE 流式响应 |
+| Agents | 查看所有 Agent 配置 |
+| Skills | 浏览 SKILL.md 内容 |
+| Cron Tasks | 定时任务列表 |
+| Sessions | 活跃会话列表 |
+| Config | 查看当前配置 |
+| Events | 实时事件流 |
 
 ## 生产部署
 
@@ -186,3 +208,11 @@ ruff check codyclaw/
 ```
 
 详细技术设计见 [docs/TECH_DESIGN.md](docs/TECH_DESIGN.md)。
+
+## 贡献
+
+欢迎参与贡献！请阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 了解开发流程和规范。
+
+## License
+
+[Apache License 2.0](LICENSE)
