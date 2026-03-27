@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -23,6 +24,9 @@ _SKILLS_DIR = str(Path(__file__).parent.parent / "skills")
 
 logger = logging.getLogger(__name__)
 
+# 流式卡片更新节流间隔（秒）
+_CARD_UPDATE_INTERVAL = 1.5
+
 _CARD_TITLE = {
     "running": "Agent 执行中...",
     "done": "执行完成",
@@ -32,16 +36,18 @@ _CARD_TITLE = {
 _FEISHU_SYSTEM_PROMPT = """\
 你是一个运行在飞书中的 AI 助手。用户通过飞书消息与你对话。
 
-## 重要规则
+## 上下文
 
-1. 你的纯文本输出用户**完全看不到**。你必须通过 feishu 工具发送消息。
-2. 每条用户消息开头有 [Feishu context]，包含 chat_id、message_id、sender_name、mentions 等信息。
+每条用户消息开头有 [Feishu context]，包含 chat_id、message_id、sender_name、mentions 等信息。
 
 ## 回复方式
 
-- 简短回复：用 feishu_reply(message_id, text) 引用回复
-- 长回复/格式化内容：用 feishu_send_card(chat_id, title, content) 发送卡片（支持 Markdown）
-- 表情回应：用 feishu_add_reaction(message_id, emoji_type)
+你的文字输出会自动以卡片形式发送给用户，**无需手动调用工具来回复**。直接输出你的回答即可。
+
+以下工具仅在需要**额外**操作时使用：
+- feishu_send_text / feishu_send_card：向其他会话或同一会话发送额外消息
+- feishu_reply：引用回复某条特定消息
+- feishu_add_reaction：给消息加表情回应
 
 ## @提及他人
 
@@ -66,6 +72,11 @@ class ActiveRun:
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     accumulated_text: str = ""
     source_message_id: Optional[str] = None  # 用户原始消息 ID
+    # 流式卡片状态
+    card_message_id: Optional[str] = None  # 已发送的流式卡片 message_id
+    last_card_update: float = 0.0  # 上次卡片更新时间戳
+    tool_calls: list[str] = field(default_factory=list)  # 已调用的工具名列表
+    has_sent_feishu_message: bool = False  # AI 是否主动通过工具发了消息
 
 
 class AgentDispatcher:
@@ -239,12 +250,19 @@ class AgentDispatcher:
             ):
                 if isinstance(chunk, TextDeltaChunk):
                     run.accumulated_text += chunk.content
+                    await self._update_streaming_card(run, msg)
 
                 elif isinstance(chunk, ToolCallChunk):
+                    # 跟踪是否调了飞书发消息工具
+                    if chunk.tool_name and chunk.tool_name.startswith("feishu_send"):
+                        run.has_sent_feishu_message = True
+                    run.tool_calls.append(chunk.tool_name or "unknown")
                     await self._emit(EventType.AGENT_TOOL_CALL, {
                         "tool": chunk.tool_name,
                         "agent_id": agent_config.agent_id,
                     })
+                    # 在流式卡片中显示工具调用进度
+                    await self._update_streaming_card(run, msg, force=True)
 
                 elif isinstance(chunk, InteractionRequestChunk):
                     await self._handle_interaction_request(run, chunk, client)
@@ -253,7 +271,9 @@ class AgentDispatcher:
                     if chunk.session_id:
                         self._sessions.set(session_key, chunk.session_id)
 
-            # 完成：移除 🤔，打 ✅
+            # 完成：最终更新卡片状态
+            await self._finalize_streaming_card(run, msg)
+            # 移除 🤔，打 ✅
             await self._replace_reaction_safe(msg.message_id, reaction_id, "DONE")
             await self._emit(EventType.AGENT_RUN_END, {
                 "agent_id": agent_config.agent_id,
@@ -264,16 +284,8 @@ class AgentDispatcher:
             logger.exception(f"Agent execution failed: {e}")
             # 出错：移除 🤔，打 ❌
             await self._replace_reaction_safe(msg.message_id, reaction_id, "CrossMark")
-            # 兜底发送错误通知
-            try:
-                error_card = build_streaming_card(
-                    _CARD_TITLE["error"], f"执行出错: {str(e)}", "error"
-                )
-                await self._channel.send_card(
-                    msg.chat_id, error_card, reply_to=msg.message_id
-                )
-            except Exception:
-                logger.warning("Failed to send error card")
+            # 更新流式卡片为错误状态，或发送新的错误卡片
+            await self._error_streaming_card(run, msg, e)
             await self._emit(EventType.AGENT_RUN_ERROR, {
                 "agent_id": agent_config.agent_id,
                 "error": str(e),
@@ -322,6 +334,87 @@ class AgentDispatcher:
     # -------------------------------------------------------------------------
     # 内部辅助
     # -------------------------------------------------------------------------
+
+    # -------------------------------------------------------------------------
+    # 流式卡片
+    # -------------------------------------------------------------------------
+
+    def _build_card_content(self, run: ActiveRun, status: str = "running") -> str:
+        """拼接卡片正文：accumulated_text + 工具调用进度。"""
+        parts = []
+        if run.accumulated_text.strip():
+            parts.append(run.accumulated_text.strip())
+        if status == "running" and run.tool_calls:
+            tool_lines = []
+            for t in run.tool_calls:
+                tool_lines.append(f"  ✓ {t}")
+            parts.append("**🔧 工具调用**\n" + "\n".join(tool_lines))
+        return "\n\n".join(parts) if parts else "⏳ 思考中..."
+
+    async def _update_streaming_card(
+        self, run: ActiveRun, msg: "IncomingMessage", force: bool = False
+    ) -> None:
+        """节流更新流式卡片：首次发送新卡片，后续每 1.5s 更新一次。"""
+        now = time.monotonic()
+        if not force and (now - run.last_card_update) < _CARD_UPDATE_INTERVAL:
+            return
+
+        content = self._build_card_content(run, "running")
+        card = build_streaming_card(_CARD_TITLE["running"], content, "running")
+
+        try:
+            if run.card_message_id is None:
+                # 首次：发送新卡片（引用回复用户消息）
+                run.card_message_id = await self._channel.send_card(
+                    msg.chat_id, card, reply_to=msg.message_id
+                )
+            else:
+                # 后续：更新同一张卡片
+                await self._channel.update_card(run.card_message_id, card)
+            run.last_card_update = now
+        except Exception as e:
+            logger.debug(f"Failed to update streaming card: {e}")
+
+    async def _finalize_streaming_card(
+        self, run: ActiveRun, msg: "IncomingMessage"
+    ) -> None:
+        """执行结束时将卡片更新为最终状态，或发送兜底回复。"""
+        content = run.accumulated_text.strip()
+
+        if run.card_message_id:
+            # 已有流式卡片 → 更新为完成状态
+            if content:
+                card = build_streaming_card(_CARD_TITLE["done"], content, "done")
+            else:
+                card = build_streaming_card(_CARD_TITLE["done"], "✅ 已完成", "done")
+            try:
+                await self._channel.update_card(run.card_message_id, card)
+            except Exception as e:
+                logger.debug(f"Failed to finalize streaming card: {e}")
+        elif content and not run.has_sent_feishu_message:
+            # 没有流式卡片且 AI 没主动发消息 → 兜底发送 accumulated_text
+            card = build_streaming_card(_CARD_TITLE["done"], content, "done")
+            try:
+                await self._channel.send_card(msg.chat_id, card, reply_to=msg.message_id)
+            except Exception as e:
+                logger.debug(f"Failed to send fallback card: {e}")
+
+    async def _error_streaming_card(
+        self, run: ActiveRun, msg: "IncomingMessage", error: Exception
+    ) -> None:
+        """出错时更新流式卡片为错误状态，或发送错误卡片。"""
+        error_content = f"执行出错: {str(error)}"
+        if run.accumulated_text.strip():
+            error_content = run.accumulated_text.strip() + f"\n\n---\n\n❌ {error_content}"
+
+        card = build_streaming_card(_CARD_TITLE["error"], error_content, "error")
+        try:
+            if run.card_message_id:
+                await self._channel.update_card(run.card_message_id, card)
+            else:
+                await self._channel.send_card(msg.chat_id, card, reply_to=msg.message_id)
+        except Exception:
+            logger.warning("Failed to send error card")
 
     async def _handle_interaction_request(
         self,
