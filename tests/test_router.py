@@ -201,3 +201,51 @@ def test_group_binding_empty_allowed_users_permits_all():
 
     msg = make_msg(chat_type="group", chat_id="group-1", sender_id="anyone")
     assert router.resolve(msg) is not None
+
+
+# --- Default agent + group + trigger_mode (bug fix) ---
+
+def test_default_agent_group_mention_mode_requires_at():
+    """Default agent with trigger_mode=mention should not respond to group messages without @."""
+    router = MessageRouter()
+    router.register_agent(make_agent(trigger_mode="mention"))
+    router.set_default_agent("agent-1")
+
+    msg_no_at = make_msg(chat_type="group", chat_id="group-1", is_mention_bot=False)
+    assert router.resolve(msg_no_at) is None
+
+    msg_at = make_msg(chat_type="group", chat_id="group-1", is_mention_bot=True)
+    assert router.resolve(msg_at) is not None
+
+
+def test_default_agent_group_prefix_mode():
+    """Default agent with trigger_mode=prefix should only respond when content starts with prefix."""
+    router = MessageRouter()
+    router.register_agent(make_agent(trigger_mode="prefix", prefix="/"))
+    router.set_default_agent("agent-1")
+
+    msg_no_prefix = make_msg(chat_type="group", chat_id="group-1", content="hello")
+    assert router.resolve(msg_no_prefix) is None
+
+    msg_prefix = make_msg(chat_type="group", chat_id="group-1", content="/hello")
+    assert router.resolve(msg_prefix) is not None
+
+
+def test_default_agent_group_all_mode_no_at_needed():
+    """Default agent with trigger_mode=all should respond to group messages without @."""
+    router = MessageRouter()
+    router.register_agent(make_agent(trigger_mode="all"))
+    router.set_default_agent("agent-1")
+
+    msg = make_msg(chat_type="group", chat_id="group-1", is_mention_bot=False)
+    assert router.resolve(msg) is not None
+
+
+def test_default_agent_p2p_ignores_trigger_mode():
+    """trigger_mode should not affect p2p messages via default agent."""
+    router = MessageRouter()
+    router.register_agent(make_agent(trigger_mode="mention"))
+    router.set_default_agent("agent-1")
+
+    msg = make_msg(chat_type="p2p", is_mention_bot=False)
+    assert router.resolve(msg) is not None

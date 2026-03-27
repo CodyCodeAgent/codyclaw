@@ -1,21 +1,35 @@
 [project]
 name = "codyclaw"
 version = "0.1.0"
+description = "Feishu-driven AI Agent Gateway powered by Cody Agent Framework"
+readme = "README.md"
+license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
-
-dependencies = [
-    # 核心
-    "cody-ai[all]",                 # Cody Agent Framework（含 SDK + CLI + Web）
-    "fastapi>=0.115.0",             # Gateway HTTP 框架
-    "uvicorn>=0.30.0",              # ASGI 服务器
-
-    # 飞书
-    "lark-oapi>=1.4.0",            # 飞书开放平台 SDK
-
-    # 自动化
-    "apscheduler>=3.10.0,<4.0",    # 定时任务调度（v4 API 不兼容）
-    "pyyaml>=6.0",                 # 配置文件解析
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Framework :: FastAPI",
 ]
+dependencies = [
+    "cody-ai[all]",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "lark-oapi>=1.4.0",
+    "apscheduler>=3.10.0,<4.0",
+    "pyyaml>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/CodyCodeAgent/codyclaw"
+Repository = "https://github.com/CodyCodeAgent/codyclaw"
+Issues = "https://github.com/CodyCodeAgent/codyclaw/issues"
+Changelog = "https://github.com/CodyCodeAgent/codyclaw/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

@@ -2,7 +2,8 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Awaitable
+from typing import Awaitable, Callable, Optional
+
 
 @dataclass
 class IncomingMessage:
@@ -15,7 +16,7 @@ class IncomingMessage:
     content: str                       # 纯文本内容（已从飞书 JSON 格式提取）
     msg_type: str                      # "text" | "image" | "file" | "post"
     images: list[bytes] = field(default_factory=list)  # 图片二进制数据
-    mentions: list[str] = field(default_factory=list)  # @提及的用户列表
+    mentions: list[dict] = field(default_factory=list)  # @提及的用户列表 [{name, open_id}]
     is_mention_bot: bool = False       # 是否 @了机器人
     raw: dict = field(default_factory=dict)  # 飞书原始事件数据
 
@@ -56,7 +57,9 @@ class LarkChannel(ABC):
         """发送文件，返回 message_id"""
 
     @abstractmethod
-    async def download_resource(self, message_id: str, file_key: str, type: str = "image") -> bytes:
+    async def download_resource(
+        self, message_id: str, file_key: str, resource_type: str = "image"
+    ) -> bytes:
         """下载消息中的图片/文件资源"""
 
     @abstractmethod
@@ -66,3 +69,11 @@ class LarkChannel(ABC):
     @abstractmethod
     async def update_card(self, message_id: str, card: dict) -> None:
         """更新已发送的交互卡片（用于进度展示）"""
+
+    @abstractmethod
+    async def add_reaction(self, message_id: str, emoji_type: str) -> str:
+        """给消息添加表情回应，返回 reaction_id"""
+
+    @abstractmethod
+    async def remove_reaction(self, message_id: str, reaction_id: str) -> None:
+        """移除消息上的表情回应"""

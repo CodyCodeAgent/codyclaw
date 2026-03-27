@@ -4,23 +4,33 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from collections import OrderedDict
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import lark_oapi as lark
 from lark_oapi.api.contact.v3 import GetUserRequest
 from lark_oapi.api.im.v1 import (
     CreateFileRequest,
     CreateFileRequestBody,
+    CreateMessageReactionRequest,
+    CreateMessageReactionRequestBody,
     CreateMessageRequest,
     CreateMessageRequestBody,
+    DeleteMessageReactionRequest,
     GetMessageResourceRequest,
+    P2ImMessageReceiveV1,
     PatchMessageRequest,
     PatchMessageRequestBody,
-    P2ImMessageReceiveV1,
+    ReplyMessageRequest,
+    ReplyMessageRequestBody,
 )
+from lark_oapi.api.im.v1.model.emoji import Emoji
 
-from codyclaw.channel.base import LarkChannel, IncomingMessage, MessageHandler
+from codyclaw.channel.base import IncomingMessage, LarkChannel, MessageHandler
+
+if TYPE_CHECKING:
+    from codyclaw.config import LarkConfig
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +44,8 @@ class LarkChannelImpl(LarkChannel):
         self.config = config
         self._handlers: list[MessageHandler] = []
         self._ws_client = None
-        self._ws_future = None                               # executor future，用于错误监控和 stop()
+        self._ws_thread: Optional[threading.Thread] = None
+        self._last_error: Optional[str] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._user_name_cache: OrderedDict[str, str] = OrderedDict()  # open_id → name（LRU）
 
@@ -53,47 +64,71 @@ class LarkChannelImpl(LarkChannel):
             self._sync_on_message_event
         ).build()
 
-    def _sync_on_message_event(self, ctx, event: P2ImMessageReceiveV1) -> None:
-        """同步包装器：lark SDK 线程 → asyncio 事件循环桥接。"""
+    def _sync_on_message_event(self, *args) -> None:
+        """同步包装器：lark SDK 线程 → asyncio 事件循环桥接。
+
+        WebSocket 模式下 SDK 只传 event 一个参数（无 ctx），
+        Webhook 模式下传 ctx + event 两个参数。兼容两种调用方式。
+        """
         if self._loop is None:
             logger.warning("Event loop not initialized, dropping message")
             return
+        event = args[-1] if args else None
+        if event is None:
+            return
         asyncio.run_coroutine_threadsafe(
-            self._on_message_event(ctx, event), self._loop
+            self._on_message_event(event), self._loop
         )
 
-    def _on_ws_done(self, future) -> None:
-        """WebSocket 线程结束回调，记录异常。"""
-        if future.cancelled():
-            # stop() 主动取消时的正常路径，不视为错误
-            logger.info("WebSocket connection cancelled (normal shutdown)")
-            return
-        exc = future.exception()
-        if exc is not None:
-            logger.error(f"WebSocket connection terminated with error: {exc}")
+    def _run_ws_in_thread(self) -> None:
+        """在独立线程中运行 lark WebSocket。
+
+        lark SDK 的 ws.client 模块在 import 时就把 event loop 捕获到了
+        模块级变量 `loop` 中（第 25-29 行），之后 start() 里的
+        loop.run_until_complete() 都用那个 loop。如果 import 发生在
+        uvicorn 的 async 上下文中，loop 就是 uvicorn 正在运行的 loop，
+        导致 'this event loop is already running'。
+
+        修复：创建新 event loop 后，直接替换 lark SDK 模块里的 loop 变量。
+        """
+        import lark_oapi.ws.client as ws_module
+
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        ws_module.loop = new_loop  # 替换 SDK 模块级的 loop 变量
+
+        try:
+            self._ws_client = lark.ws.Client(
+                self.config.app_id,
+                self.config.app_secret,
+                event_handler=self._event_handler,
+                log_level=lark.LogLevel.WARNING,
+            )
+            self._ws_client.start()
+        except Exception as e:
+            self._last_error = str(e)
+            logger.error(f"WebSocket connection terminated with error: {e}")
         else:
-            logger.info("WebSocket connection closed")
+            self._last_error = None
+            logger.info("WebSocket connection closed normally")
 
     async def start(self) -> None:
-        # 保存事件循环引用，供 _sync_on_message_event 跨线程使用
         self._loop = asyncio.get_running_loop()
-
-        self._ws_client = lark.ws.Client(
-            self.config.app_id,
-            self.config.app_secret,
-            event_handler=self._event_handler,
-            log_level=lark.LogLevel.WARNING,
+        # Client 构造和 start() 都在独立线程里完成，避免 event loop 冲突
+        self._ws_thread = threading.Thread(
+            target=self._run_ws_in_thread, daemon=True, name="lark-ws"
         )
-        # start() 是阻塞调用，放到线程池避免阻塞事件循环
-        self._ws_future = self._loop.run_in_executor(None, self._ws_client.start)
-        self._ws_future.add_done_callback(self._on_ws_done)
+        self._ws_thread.start()
+
+    @property
+    def is_connected(self) -> bool:
+        """WebSocket 线程是否存活。"""
+        return self._ws_thread is not None and self._ws_thread.is_alive()
 
     async def stop(self) -> None:
         """关闭渠道连接"""
-        if self._ws_future is not None and not self._ws_future.done():
-            self._ws_future.cancel()
         self._ws_client = None
-        self._ws_future = None
+        self._ws_thread = None
 
     async def _fetch_user_name(self, open_id: str) -> str:
         """获取用户显示名，LRU 缓存（上限 1000 条）。失败时回退到 open_id。
@@ -124,7 +159,7 @@ class LarkChannelImpl(LarkChannel):
             self._user_name_cache.popitem(last=False)  # 淘汰最久未使用的条目
         return name
 
-    async def _on_message_event(self, ctx, event: P2ImMessageReceiveV1) -> None:
+    async def _on_message_event(self, event: P2ImMessageReceiveV1) -> None:
         """处理飞书消息事件（在 asyncio 事件循环中执行）"""
         msg = event.event.message
         content_json = json.loads(msg.content)
@@ -134,10 +169,14 @@ class LarkChannelImpl(LarkChannel):
         is_mention_bot = False
         if msg.mentions:
             for m in msg.mentions:
-                mentions.append(m.id.open_id)
-                if m.id.open_id == self.config.bot_open_id:
+                open_id = m.id.open_id
+                display_name = m.name or open_id
+                if open_id == self.config.bot_open_id:
                     is_mention_bot = True
                     text = text.replace(f"@_user_{m.key}", "").strip()
+                else:
+                    mentions.append({"name": display_name, "open_id": open_id})
+                    text = text.replace(f"@_user_{m.key}", f"@{display_name}")
 
         sender_open_id = event.event.sender.sender_id.open_id
         sender_name = await self._fetch_user_name(sender_open_id)
@@ -158,7 +197,9 @@ class LarkChannelImpl(LarkChannel):
         if msg.message_type == "image":
             image_key = content_json.get("image_key", "")
             if image_key:
-                data = await self.download_resource(msg.message_id, image_key, type="image")
+                data = await self.download_resource(
+                    msg.message_id, image_key, resource_type="image"
+                )
                 incoming.images.append(data)
 
         for handler in self._handlers:
@@ -166,14 +207,15 @@ class LarkChannelImpl(LarkChannel):
 
     async def send_text(self, chat_id: str, text: str, reply_to: Optional[str] = None) -> str:
         """发送文本消息"""
-        body_builder = CreateMessageRequestBody.builder() \
+        content = json.dumps({"text": text})
+        if reply_to:
+            return await self._reply_message(reply_to, "text", content)
+
+        body = CreateMessageRequestBody.builder() \
             .receive_id(chat_id) \
             .msg_type("text") \
-            .content(json.dumps({"text": text}))
-        if reply_to:
-            body_builder = body_builder.quote_message_id(reply_to)
-        body = body_builder.build()
-
+            .content(content) \
+            .build()
         request = CreateMessageRequest.builder() \
             .receive_id_type("chat_id") \
             .request_body(body) \
@@ -189,14 +231,15 @@ class LarkChannelImpl(LarkChannel):
 
     async def send_card(self, chat_id: str, card: dict, reply_to: Optional[str] = None) -> str:
         """发送交互卡片（支持 Markdown 渲染）"""
-        body_builder = CreateMessageRequestBody.builder() \
+        content = json.dumps(card)
+        if reply_to:
+            return await self._reply_message(reply_to, "interactive", content)
+
+        body = CreateMessageRequestBody.builder() \
             .receive_id(chat_id) \
             .msg_type("interactive") \
-            .content(json.dumps(card))
-        if reply_to:
-            body_builder = body_builder.quote_message_id(reply_to)
-        body = body_builder.build()
-
+            .content(content) \
+            .build()
         request = CreateMessageRequest.builder() \
             .receive_id_type("chat_id") \
             .request_body(body) \
@@ -208,6 +251,25 @@ class LarkChannelImpl(LarkChannel):
         )
         if not response.success():
             raise RuntimeError(f"send_card failed: {response.msg}")
+        return response.data.message_id
+
+    async def _reply_message(self, message_id: str, msg_type: str, content: str) -> str:
+        """回复指定消息（使用 Reply API: POST /messages/:message_id/reply）"""
+        body = ReplyMessageRequestBody.builder() \
+            .msg_type(msg_type) \
+            .content(content) \
+            .build()
+        request = ReplyMessageRequest.builder() \
+            .message_id(message_id) \
+            .request_body(body) \
+            .build()
+
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: self._client.im.v1.message.reply(request)
+        )
+        if not response.success():
+            raise RuntimeError(f"reply_message failed: {response.msg}")
         return response.data.message_id
 
     async def send_file(self, chat_id: str, file_path: str, file_name: str) -> str:
@@ -260,15 +322,15 @@ class LarkChannelImpl(LarkChannel):
         return response.data.message_id
 
     async def download_resource(
-        self, message_id: str, file_key: str, type: str = "image"
+        self, message_id: str, file_key: str, resource_type: str = "image"
     ) -> bytes:
         """下载消息中的图片或文件资源。
-        type: "image" | "file"
+        resource_type: "image" | "file"
         """
         request = GetMessageResourceRequest.builder() \
             .message_id(message_id) \
             .file_key(file_key) \
-            .type(type) \
+            .type(resource_type) \
             .build()
 
         loop = asyncio.get_running_loop()
@@ -290,9 +352,44 @@ class LarkChannelImpl(LarkChannel):
             .build()
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
+        response = await loop.run_in_executor(
             None, lambda: self._client.im.v1.message.patch(request)
         )
+        if not response.success():
+            raise RuntimeError(f"update_card failed: {response.msg}")
+
+    async def add_reaction(self, message_id: str, emoji_type: str) -> str:
+        """给消息添加表情回应，返回 reaction_id"""
+        emoji = Emoji.builder().emoji_type(emoji_type).build()
+        body = CreateMessageReactionRequestBody.builder() \
+            .reaction_type(emoji) \
+            .build()
+        request = CreateMessageReactionRequest.builder() \
+            .message_id(message_id) \
+            .request_body(body) \
+            .build()
+
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: self._client.im.v1.message_reaction.create(request)
+        )
+        if not response.success():
+            raise RuntimeError(f"add_reaction failed: {response.msg}")
+        return response.data.reaction_id
+
+    async def remove_reaction(self, message_id: str, reaction_id: str) -> None:
+        """移除消息上的表情回应"""
+        request = DeleteMessageReactionRequest.builder() \
+            .message_id(message_id) \
+            .reaction_id(reaction_id) \
+            .build()
+
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: self._client.im.v1.message_reaction.delete(request)
+        )
+        if not response.success():
+            raise RuntimeError(f"remove_reaction failed: {response.msg}")
 
     def on_message(self, handler: MessageHandler) -> None:
         self._handlers.append(handler)

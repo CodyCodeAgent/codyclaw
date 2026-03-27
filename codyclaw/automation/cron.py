@@ -2,14 +2,19 @@
 
 import logging
 import uuid
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from codyclaw.channel.cards import build_cron_result_card
-from codyclaw.db import save_cron_task, delete_cron_task
+from codyclaw.db import delete_cron_task, save_cron_task
+
+if TYPE_CHECKING:
+    from codyclaw.channel.base import LarkChannel
+    from codyclaw.gateway.dispatcher import AgentDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +137,15 @@ class CronScheduler:
 
     @staticmethod
     def _parse_interval(schedule: str) -> int:
-        """解析简单间隔描述为分钟数"""
+        """解析简单间隔描述为分钟数。格式不合法时回退为 60 分钟。"""
         schedule = schedule.lower().replace("every", "").strip()
-        if schedule.endswith("h"):
-            return int(schedule[:-1]) * 60
-        elif schedule.endswith("m"):
-            return int(schedule[:-1])
-        elif schedule.isdigit():
-            return int(schedule)
+        try:
+            if schedule.endswith("h"):
+                return int(schedule[:-1]) * 60
+            elif schedule.endswith("m"):
+                return int(schedule[:-1])
+            elif schedule.isdigit():
+                return int(schedule)
+        except ValueError:
+            logger.warning(f"Invalid interval format '{schedule}', defaulting to 60 minutes")
         return 60  # 默认 1 小时

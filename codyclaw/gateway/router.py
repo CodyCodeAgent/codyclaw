@@ -1,7 +1,10 @@
 # codyclaw/gateway/router.py
 
 from dataclasses import dataclass, field
-from typing import Optional, Iterator
+from typing import TYPE_CHECKING, Iterator, Optional
+
+if TYPE_CHECKING:
+    from codyclaw.channel.base import IncomingMessage
 
 
 @dataclass
@@ -11,6 +14,8 @@ class AgentConfig:
     name: str
     workdir: str                           # Agent 工作目录
     model: str = "claude-sonnet-4-20250514"
+    api_key: str = ""                      # 模型 API Key（覆盖全局 cody.model_api_key）
+    base_url: str = ""                     # 模型 Base URL（用于第三方兼容接口）
     description: str = ""
     allowed_users: list[str] = field(default_factory=list)   # 空 = 所有人
     allowed_groups: list[str] = field(default_factory=list)  # 空 = 所有群
@@ -80,8 +85,15 @@ class MessageRouter:
             if agent.allowed_users and msg.sender_id not in agent.allowed_users:
                 return None
             # 群聊白名单（空 = 所有群；p2p 消息跳过此检查）
-            if msg.chat_type == "group" and agent.allowed_groups and msg.chat_id not in agent.allowed_groups:
+            if msg.chat_type == "group" and agent.allowed_groups and \
+                    msg.chat_id not in agent.allowed_groups:
                 return None
+            # 触发模式（仅群聊需要检查；p2p 消息始终触发）
+            if msg.chat_type == "group":
+                if agent.trigger_mode == "mention" and not msg.is_mention_bot:
+                    return None
+                if agent.trigger_mode == "prefix" and not msg.content.startswith(agent.prefix):
+                    return None
             return agent
 
         return None
