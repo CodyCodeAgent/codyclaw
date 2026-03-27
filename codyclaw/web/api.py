@@ -296,6 +296,36 @@ async def update_config(req: Request):
     }
 
 
+@router.put("/config/quick")
+async def quick_update_config(req: Request):
+    """快捷更新 API Key 和 Model（允许敏感字段）。"""
+    config_path = getattr(req.app.state, "config_path", None)
+    if not config_path or not Path(config_path).exists():
+        return JSONResponse({"error": "Config file not found"}, status_code=404)
+
+    body = await req.json()
+    api_key = body.get("api_key", "").strip()
+    model = body.get("model", "").strip()
+
+    if not api_key and not model:
+        return {"status": "ok", "message": "Nothing to update"}
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    if api_key:
+        raw.setdefault("cody", {})["model_api_key"] = api_key
+
+    if model and raw.get("agents"):
+        for agent in raw["agents"]:
+            agent["model"] = model
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(raw, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+    return {"status": "ok", "message": "Updated. Restart to apply."}
+
+
 # ---------------------------------------------------------------------------
 # Chat (SSE streaming)
 # ---------------------------------------------------------------------------

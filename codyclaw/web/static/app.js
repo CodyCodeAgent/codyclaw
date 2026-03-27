@@ -50,6 +50,21 @@ function loadPage(page) {
 async function loadDashboard() {
   try {
     const data = await fetchJSON(`${API}/dashboard`);
+
+    // 状态提示
+    const alertEl = document.getElementById('dashboard-alert');
+    try {
+      const health = await fetchJSON('/health');
+      if (health.lark_connected) {
+        alertEl.className = 'dashboard-alert alert-success';
+        alertEl.innerHTML = '<strong>Feishu Connected</strong> — The bot is online and ready to receive messages. Try sending a message to the bot in Feishu!';
+      } else {
+        alertEl.className = 'dashboard-alert alert-warning';
+        alertEl.innerHTML = '<strong>Feishu Disconnected</strong> — Please check your Lark App ID and App Secret in the <a href="#" onclick="navigateTo(\'config\')">Config</a> page.';
+      }
+      alertEl.style.display = 'block';
+    } catch { alertEl.style.display = 'none'; }
+
     const grid = document.getElementById('stats-grid');
     grid.innerHTML = [
       statCard('Agents', data.agents.length, 'info'),
@@ -342,6 +357,8 @@ async function loadSessions() {
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
+let configLoaded = false;
+
 async function loadConfig() {
   try {
     const data = await fetchJSON(`${API}/config`);
@@ -350,15 +367,22 @@ async function loadConfig() {
 
     // 填充 Quick Edit 表单
     const gw = data.config.gateway || {};
+    const agents = data.config.agents || [];
     document.getElementById('cfg-host').value = gw.host || '0.0.0.0';
     document.getElementById('cfg-port').value = gw.port || 8080;
     document.getElementById('cfg-log-level').value = gw.log_level || 'info';
+    document.getElementById('cfg-model').value = agents.length > 0 ? (agents[0].model || '') : '';
+    document.getElementById('cfg-api-key').value = '';
+    document.getElementById('cfg-api-key').placeholder = '(unchanged)';
 
-    // 监听变更
-    const saveBtn = document.getElementById('config-save-btn');
-    document.querySelectorAll('.cfg-input').forEach(el => {
-      el.addEventListener('change', () => { saveBtn.style.display = ''; });
-    });
+    // 仅绑定一次监听器
+    if (!configLoaded) {
+      configLoaded = true;
+      const saveBtn = document.getElementById('config-save-btn');
+      document.querySelectorAll('.cfg-input').forEach(el => {
+        el.addEventListener('input', () => { saveBtn.style.display = ''; });
+      });
+    }
   } catch (e) { console.error('Config load error:', e); }
 }
 
@@ -377,18 +401,33 @@ document.getElementById('config-save-btn').addEventListener('click', async () =>
     },
   };
 
+  // API Key 和 Model 通过 /api/config/quick 单独处理（允许敏感字段）
+  const apiKey = document.getElementById('cfg-api-key').value.trim();
+  const model = document.getElementById('cfg-model').value.trim();
+
   try {
+    // 保存 gateway 配置
     const res = await fetch(`${API}/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ updates }),
     });
+
+    // 保存 API Key / Model（通过 quick edit 端点）
+    if (apiKey || model) {
+      await fetch(`${API}/config/quick`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: apiKey, model: model }),
+      });
+    }
+
     const data = await res.json();
     if (res.ok) {
       msg.style.color = 'var(--success)';
       msg.textContent = 'Saved! Restart to apply changes.';
       btn.style.display = 'none';
-      loadConfig(); // 刷新只读视图
+      loadConfig();
     } else {
       msg.style.color = 'var(--danger)';
       msg.textContent = data.error || 'Save failed';
@@ -536,6 +575,13 @@ function hideSetup() {
   document.querySelector('.main').style.display = '';
 }
 
+// Model select → custom input toggle
+document.getElementById('s-model').addEventListener('change', (e) => {
+  const custom = document.getElementById('s-model-custom');
+  custom.style.display = e.target.value === '' ? 'block' : 'none';
+  if (e.target.value !== '') custom.value = '';
+});
+
 // Test Lark connection
 document.getElementById('test-lark-btn').addEventListener('click', async () => {
   const btn = document.getElementById('test-lark-btn');
@@ -574,13 +620,15 @@ document.getElementById('setup-form').addEventListener('submit', async (e) => {
   btn.disabled = true;
   btn.textContent = 'Saving...';
 
+  const modelSelect = document.getElementById('s-model').value;
+  const modelCustom = document.getElementById('s-model-custom').value;
   const payload = {
     lark_app_id: document.getElementById('s-lark-app-id').value,
     lark_app_secret: document.getElementById('s-lark-app-secret').value,
     lark_bot_open_id: document.getElementById('s-lark-bot-id').value,
     api_key: document.getElementById('s-api-key').value,
     base_url: document.getElementById('s-base-url').value,
-    agent_model: document.getElementById('s-model').value,
+    agent_model: modelSelect || modelCustom || 'claude-sonnet-4-20250514',
     agent_name: document.getElementById('s-agent-name').value,
     agent_workdir: document.getElementById('s-agent-workdir').value,
   };

@@ -21,52 +21,77 @@
       <form id="setup-form" autocomplete="off">
         <!-- Step 1: Lark -->
         <div class="setup-section">
-          <h3>1. Feishu / Lark Application</h3>
-          <p class="setup-hint">Create an app at <a href="https://open.feishu.cn/" target="_blank">open.feishu.cn</a>, enable Bot with WebSocket mode.</p>
+          <div class="step-num">1</div>
+          <h3>飞书应用配置</h3>
+          <div class="setup-steps">
+            <p>请先完成以下准备工作：</p>
+            <ol>
+              <li>打开 <a href="https://open.feishu.cn/" target="_blank">飞书开放平台</a>，创建「企业自建应用」</li>
+              <li>进入应用 → 「凭证与基础信息」页面，复制 App ID 和 App Secret</li>
+              <li>进入「添加应用能力」→ 开启「机器人」，连接方式选择 <strong>WebSocket</strong></li>
+              <li>进入「权限管理」→ 添加 <code>im:message</code> 权限（收发消息）</li>
+            </ol>
+          </div>
           <div class="form-group">
             <label for="s-lark-app-id">App ID <span class="required">*</span></label>
-            <input type="text" id="s-lark-app-id" placeholder="cli_xxxx" required>
+            <input type="text" id="s-lark-app-id" placeholder="cli_xxxxxxxxxxxx" required>
+            <div class="field-hint">在「凭证与基础信息」页面顶部，格式为 cli_ 开头</div>
           </div>
           <div class="form-group">
             <label for="s-lark-app-secret">App Secret <span class="required">*</span></label>
-            <input type="password" id="s-lark-app-secret" placeholder="xxxx" required>
+            <input type="password" id="s-lark-app-secret" placeholder="点击显示后复制" required>
+            <div class="field-hint">同一页面中，点击「显示」后复制</div>
           </div>
           <div class="form-group">
-            <label for="s-lark-bot-id">Bot Open ID</label>
-            <input type="text" id="s-lark-bot-id" placeholder="ou_xxxx (for @mention detection)">
+            <label for="s-lark-bot-id">Bot Open ID <span class="field-hint-inline">（可选）</span></label>
+            <input type="text" id="s-lark-bot-id" placeholder="ou_xxxxxxxxxxxx">
+            <div class="field-hint">在群聊中 @机器人 时用于识别，不填也能正常工作（群聊需 @触发时建议填写）</div>
           </div>
-          <button type="button" class="btn btn-sm" id="test-lark-btn">Test Connection</button>
+          <button type="button" class="btn btn-sm" id="test-lark-btn">测试连接</button>
           <span id="test-lark-result" class="test-result"></span>
         </div>
 
         <!-- Step 2: LLM -->
         <div class="setup-section">
-          <h3>2. LLM Provider</h3>
+          <div class="step-num">2</div>
+          <h3>AI 模型配置</h3>
+          <p class="setup-hint">配置 AI 模型的 API 密钥。支持 Anthropic（Claude）或其他兼容 OpenAI 接口的服务商。</p>
           <div class="form-group">
             <label for="s-api-key">API Key <span class="required">*</span></label>
-            <input type="password" id="s-api-key" placeholder="sk-ant-... or your provider's key" required>
+            <input type="password" id="s-api-key" placeholder="sk-ant-xxxxx..." required>
+            <div class="field-hint">从 <a href="https://console.anthropic.com/settings/keys" target="_blank">Anthropic Console</a> 获取，或使用其他服务商提供的密钥</div>
           </div>
           <div class="form-group">
-            <label for="s-base-url">Base URL <span class="setup-hint-inline">(leave empty for Anthropic)</span></label>
-            <input type="text" id="s-base-url" placeholder="https://api.deepseek.com/v1">
+            <label for="s-base-url">接口地址 <span class="field-hint-inline">（使用 Anthropic Claude 则留空）</span></label>
+            <input type="text" id="s-base-url" placeholder="留空 = 使用 Anthropic 官方接口">
+            <div class="field-hint">仅当使用第三方模型时填写，例如 DeepSeek: https://api.deepseek.com/v1</div>
           </div>
           <div class="form-group">
-            <label for="s-model">Model</label>
-            <input type="text" id="s-model" placeholder="claude-sonnet-4-20250514" value="claude-sonnet-4-20250514">
+            <label for="s-model">模型名称</label>
+            <select id="s-model" class="select" style="width:100%">
+              <option value="claude-sonnet-4-20250514">Claude Sonnet 4 （推荐，性价比最高）</option>
+              <option value="claude-opus-4-20250514">Claude Opus 4 （最强，成本较高）</option>
+              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 （最快，成本最低）</option>
+              <option value="">其他模型（手动输入）</option>
+            </select>
+            <input type="text" id="s-model-custom" style="display:none;margin-top:6px" placeholder="输入模型名，如 deepseek-chat">
           </div>
         </div>
 
         <!-- Step 3: Agent -->
         <div class="setup-section">
-          <h3>3. Agent</h3>
+          <div class="step-num">3</div>
+          <h3>AI 助手设置</h3>
+          <p class="setup-hint">给你的 AI 助手起个名字，并指定它的工作目录（Agent 可以在此目录下读写文件和执行命令）。</p>
           <div class="form-row">
             <div class="form-group">
-              <label for="s-agent-name">Name</label>
-              <input type="text" id="s-agent-name" placeholder="Assistant" value="Assistant">
+              <label for="s-agent-name">助手名称</label>
+              <input type="text" id="s-agent-name" placeholder="例如：小助手" value="通用助手">
             </div>
             <div class="form-group">
-              <label for="s-agent-workdir">Working Directory</label>
+              <label for="s-agent-workdir">工作目录</label>
               <input type="text" id="s-agent-workdir" placeholder="/home/user/workspace" value="/tmp">
+              <div class="field-hint">Agent 执行命令和读写文件的根目录，建议设为你的项目路径</div>
             </div>
           </div>
         </div>
@@ -130,6 +155,7 @@
     <!-- Dashboard -->
     <div id="page-dashboard" class="page active">
       <div class="page-header"><h1>Dashboard</h1></div>
+      <div id="dashboard-alert" style="display:none"></div>
       <div class="stats-grid" id="stats-grid"></div>
       <div class="card mt" id="cron-overview">
         <h3>Cron Tasks</h3>
@@ -189,16 +215,27 @@
         <h3>Quick Edit</h3>
         <div class="form-row" style="margin-top:12px">
           <div class="form-group">
+            <label>API Key</label>
+            <input type="password" id="cfg-api-key" class="cfg-input" placeholder="(unchanged)">
+            <div class="field-hint">留空 = 不修改当前密钥</div>
+          </div>
+          <div class="form-group">
+            <label>Model</label>
+            <input type="text" id="cfg-model" class="cfg-input" placeholder="e.g. claude-sonnet-4-20250514">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
             <label>Gateway Host</label>
-            <input type="text" id="cfg-host" class="cfg-input" data-path="gateway.host">
+            <input type="text" id="cfg-host" class="cfg-input">
           </div>
           <div class="form-group">
             <label>Gateway Port</label>
-            <input type="number" id="cfg-port" class="cfg-input" data-path="gateway.port">
+            <input type="number" id="cfg-port" class="cfg-input">
           </div>
           <div class="form-group">
             <label>Log Level</label>
-            <select id="cfg-log-level" class="select cfg-input" data-path="gateway.log_level">
+            <select id="cfg-log-level" class="select cfg-input">
               <option value="debug">debug</option>
               <option value="info">info</option>
               <option value="warning">warning</option>
@@ -206,7 +243,7 @@
             </select>
           </div>
         </div>
-        <div id="config-edit-msg" style="font-size:12px;color:var(--text-secondary);margin-top:4px"></div>
+        <div id="config-edit-msg" style="font-size:12px;margin-top:8px"></div>
       </div>
       <div class="card">
         <h3>Full Configuration <span style="font-size:12px;color:var(--text-secondary);font-weight:400">(read-only)</span></h3>
