@@ -442,6 +442,18 @@ document.getElementById('config-save-btn').addEventListener('click', async () =>
   btn.textContent = 'Save Changes';
 });
 
+// Restart button
+document.getElementById('config-restart-btn').addEventListener('click', async () => {
+  if (!confirm('Restart CodyClaw? The service will be briefly unavailable.')) return;
+  const btn = document.getElementById('config-restart-btn');
+  btn.disabled = true;
+  btn.textContent = 'Restarting...';
+  try {
+    await fetch(`${API}/restart`, { method: 'POST' });
+  } catch { /* server is shutting down */ }
+  waitForRestart();
+});
+
 // Simple YAML-like pretty printer for display
 function yaml_stringify(obj, indent = 0) {
   if (obj === null || obj === undefined) return 'null';

@@ -364,6 +364,20 @@ async def quick_update_config(req: Request):
     return {"status": "ok", "message": "Saved! Restart to apply changes."}
 
 
+@router.post("/restart")
+async def restart_server(req: Request):
+    """触发进程重启。"""
+    import threading
+
+    def _restart():
+        time.sleep(1)
+        logger.info("Restarting CodyClaw via /api/restart...")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    threading.Thread(target=_restart, daemon=True).start()
+    return {"status": "ok", "message": "Restarting..."}
+
+
 # ---------------------------------------------------------------------------
 # Chat (SSE streaming)
 # ---------------------------------------------------------------------------
