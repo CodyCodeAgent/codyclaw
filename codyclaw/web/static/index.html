@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CodyClaw Console</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-icon">C</span>
+      <span class="brand-text">CodyClaw</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-page="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Dashboard
+      </a>
+      <a href="#" class="nav-item" data-page="chat">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        Chat
+      </a>
+      <a href="#" class="nav-item" data-page="agents">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
+        Agents
+      </a>
+      <a href="#" class="nav-item" data-page="skills">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
+        Skills
+      </a>
+      <a href="#" class="nav-item" data-page="cron">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Cron Tasks
+      </a>
+      <a href="#" class="nav-item" data-page="sessions">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        Sessions
+      </a>
+      <a href="#" class="nav-item" data-page="config">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        Config
+      </a>
+      <a href="#" class="nav-item" data-page="events">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Events
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="status-dot"></div>
+      <span id="health-status">Connecting...</span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- Dashboard -->
+    <div id="page-dashboard" class="page active">
+      <div class="page-header"><h1>Dashboard</h1></div>
+      <div class="stats-grid" id="stats-grid"></div>
+      <div class="card mt" id="cron-overview">
+        <h3>Cron Tasks</h3>
+        <div id="dashboard-cron-list" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div id="page-chat" class="page">
+      <div class="page-header">
+        <h1>Chat</h1>
+        <div class="chat-controls">
+          <select id="chat-agent-select" class="select"></select>
+          <button class="btn btn-sm" id="chat-new-session">New Session</button>
+        </div>
+      </div>
+      <div class="chat-container">
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-input-area">
+          <textarea id="chat-input" placeholder="Type a message... (Enter to send, Shift+Enter for newline)" rows="2"></textarea>
+          <button class="btn btn-primary" id="chat-send">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agents -->
+    <div id="page-agents" class="page">
+      <div class="page-header"><h1>Agents</h1></div>
+      <div id="agents-list" class="cards-grid"></div>
+    </div>
+
+    <!-- Skills -->
+    <div id="page-skills" class="page">
+      <div class="page-header"><h1>Skills</h1></div>
+      <div id="skills-list"></div>
+    </div>
+
+    <!-- Cron Tasks -->
+    <div id="page-cron" class="page">
+      <div class="page-header"><h1>Cron Tasks</h1></div>
+      <div id="cron-list" class="table-wrap"></div>
+    </div>
+
+    <!-- Sessions -->
+    <div id="page-sessions" class="page">
+      <div class="page-header"><h1>Active Sessions</h1></div>
+      <div id="sessions-list" class="table-wrap"></div>
+    </div>
+
+    <!-- Config -->
+    <div id="page-config" class="page">
+      <div class="page-header">
+        <h1>Configuration</h1>
+        <button class="btn btn-primary btn-sm" id="config-save" style="display:none">Save Changes</button>
+      </div>
+      <div class="card">
+        <div class="config-path" id="config-path"></div>
+        <pre id="config-editor" class="config-code" contenteditable="true"></pre>
+      </div>
+    </div>
+
+    <!-- Events -->
+    <div id="page-events" class="page">
+      <div class="page-header">
+        <h1>Live Events</h1>
+        <button class="btn btn-sm" id="events-clear">Clear</button>
+      </div>
+      <div class="events-feed" id="events-feed"></div>
+    </div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

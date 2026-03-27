@@ -54,8 +54,8 @@ def _resolve_env_vars(value: str) -> str:
     return re.sub(r'\$\{(\w+)\}', replacer, value)
 
 
-def load_config(path: Optional[str] = None) -> CodyClawConfig:
-    """加载配置文件"""
+def load_config(path: Optional[str] = None) -> tuple[CodyClawConfig, str]:
+    """加载配置文件，返回 (config, config_file_path)。"""
     if path is None:
         candidates = [
             Path.home() / ".codyclaw" / "config.yaml",
@@ -100,7 +100,7 @@ def load_config(path: Optional[str] = None) -> CodyClawConfig:
     if not config.db_path:
         config.db_path = str(Path.home() / ".codyclaw" / "codyclaw.db")
 
-    return config
+    return config, path
 
 
 def _deep_resolve(obj):

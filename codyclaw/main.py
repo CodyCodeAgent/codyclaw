@@ -3,9 +3,12 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from codyclaw.automation.boot import execute_boot_scripts
 from codyclaw.automation.cron import CronScheduler, CronTask
@@ -114,13 +117,17 @@ async def lifespan(app: FastAPI):
     await channel.stop()
 
 
-def create_app(config: CodyClawConfig) -> FastAPI:
+_WEB_DIR = str(Path(__file__).parent / "web" / "static")
+
+
+def create_app(config: CodyClawConfig, config_path: str = "") -> FastAPI:
     app = FastAPI(
         title="CodyClaw Gateway",
         version="0.1.0",
         lifespan=lifespan,
     )
     app.state.config = config
+    app.state.config_path = config_path
 
     # --- 管理 API ---
     @app.get("/health")
@@ -159,13 +166,25 @@ def create_app(config: CodyClawConfig) -> FastAPI:
             for k, v in dispatcher.get_sessions().items()
         ]}
 
+    # --- Web 控制台 ---
+    from codyclaw.web.api import router as web_router
+    app.include_router(web_router)
+
+    # 静态文件
+    app.mount("/static", StaticFiles(directory=_WEB_DIR), name="static")
+
+    # 控制台首页（SPA 入口）
+    @app.get("/")
+    async def console_index():
+        return FileResponse(Path(_WEB_DIR) / "index.html")
+
     return app
 
 
 def main():
-    config = load_config()
+    config, config_path = load_config()
     setup_logging(config.gateway.log_level)
-    app = create_app(config)
+    app = create_app(config, config_path=config_path)
     uvicorn.run(
         app,
         host=config.gateway.host,
