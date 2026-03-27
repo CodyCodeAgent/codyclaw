@@ -19,6 +19,7 @@ from lark_oapi.api.im.v1 import (
     CreateMessageRequestBody,
     DeleteMessageReactionRequest,
     GetMessageResourceRequest,
+    ListMessageRequest,
     P2ImMessageReceiveV1,
     PatchMessageRequest,
     PatchMessageRequestBody,
@@ -390,6 +391,64 @@ class LarkChannelImpl(LarkChannel):
         )
         if not response.success():
             raise RuntimeError(f"remove_reaction failed: {response.msg}")
+
+    async def fetch_chat_history(
+        self, chat_id: str, count: int = 10, before_message_id: Optional[str] = None
+    ) -> list[dict]:
+        """拉取群聊最近消息，返回按时间正序排列的消息列表。
+
+        需要飞书应用拥有 im:message:readonly 权限。
+        """
+        request = ListMessageRequest.builder() \
+            .container_id(chat_id) \
+            .container_id_type("chat_id") \
+            .page_size(count) \
+            .sort_type("ByCreateTimeDesc") \
+            .build()
+
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: self._client.im.v1.message.list(request)
+        )
+
+        if not response.success() or not response.data or not response.data.items:
+            reason = getattr(response, "msg", "no items")
+            logger.debug(f"Failed to fetch chat history for {chat_id}: {reason}")
+            return []
+
+        results = []
+        for msg in response.data.items:
+            # 跳过机器人自己发的消息
+            sender_id = ""
+            if msg.sender and hasattr(msg.sender, "id"):
+                sender_id = msg.sender.id
+            if sender_id == self.config.bot_open_id:
+                continue
+
+            # 解析消息内容
+            text = ""
+            if msg.body and msg.body.content:
+                try:
+                    content_json = json.loads(msg.body.content)
+                    text = content_json.get("text", "")
+                except (json.JSONDecodeError, TypeError):
+                    text = msg.body.content if msg.body.content else ""
+
+            if not text:
+                continue
+
+            sender_name = await self._fetch_user_name(sender_id) if sender_id else "unknown"
+
+            results.append({
+                "sender_name": sender_name,
+                "content": text,
+                "msg_type": msg.msg_type or "text",
+                "message_id": msg.message_id or "",
+            })
+
+        # API 返回降序，翻转成正序（最早的在前）
+        results.reverse()
+        return results
 
     def on_message(self, handler: MessageHandler) -> None:
         self._handlers.append(handler)

@@ -36,9 +36,12 @@ _CARD_TITLE = {
 _FEISHU_SYSTEM_PROMPT = """\
 你是一个运行在飞书中的 AI 助手。用户通过飞书消息与你对话。
 
-## 上下文
+## 上下文格式
 
-每条用户消息开头有 [Feishu context]，包含 chat_id、message_id、sender_name、mentions 等信息。
+每条用户消息包含以下结构：
+1. `[Feishu context]` 行：chat_id、message_id、sender_name、chat_type、mentions
+2. `[Recent chat history]`（群聊时提供）：群内最近的对话记录，帮助你理解讨论背景
+3. 当前用户消息正文
 
 ## 回复方式
 
@@ -52,15 +55,20 @@ _FEISHU_SYSTEM_PROMPT = """\
 ## @提及他人
 
 在消息文本中用 `<at user_id="open_id">名字</at>` 格式来 @某人。
-open_id 从 [Feishu context] 的 mentions 字段获取。
+open_id 可从 [Feishu context] 的 mentions 字段或 [Recent chat history] 中获取。
 例如：`<at user_id="ou_abc123">小明</at> 你好！`
 
 ## 行为准则
 
-- 自然对话，不要机械地复述你的能力
-- 在群聊中注意区分谁在说话、谁被@了
+- 自然对话，像一个真实的群成员一样参与讨论
+- 仔细阅读聊天历史，理解当前讨论的上下文和语境
+- 在群聊中注意区分谁在说话、谁被@了、谁在和谁对话
+- 如果历史记录中有人提到了某个话题，用户的问题很可能与此相关
 - 直接回答问题或执行任务，不要解释你是怎么工作的
 """
+
+# 群聊历史拉取条数
+_GROUP_HISTORY_COUNT = 15
 
 
 @dataclass
@@ -236,11 +244,20 @@ class AgentDispatcher:
         if msg.mentions:
             mention_parts = [f'{m["name"]}(open_id={m["open_id"]})' for m in msg.mentions]
             mentions_str = f" mentions=[{', '.join(mention_parts)}]"
-        context = (
+
+        context_parts = [
             f"[Feishu context] chat_id={msg.chat_id} message_id={msg.message_id} "
-            f"chat_type={msg.chat_type} sender_name={msg.sender_name}{mentions_str}\n\n"
-            f"{msg.content}"
-        )
+            f"chat_type={msg.chat_type} sender_name={msg.sender_name}{mentions_str}",
+        ]
+
+        # 群聊时拉取最近聊天记录，注入为上下文
+        if msg.chat_type == "group":
+            history = await self._fetch_history_safe(msg.chat_id, msg.message_id)
+            if history:
+                context_parts.append(self._format_chat_history(history))
+
+        context_parts.append(f"{msg.sender_name}: {msg.content}")
+        context = "\n\n".join(context_parts)
 
         try:
             async for chunk in client.stream(
@@ -334,6 +351,30 @@ class AgentDispatcher:
     # -------------------------------------------------------------------------
     # 内部辅助
     # -------------------------------------------------------------------------
+
+    async def _fetch_history_safe(
+        self, chat_id: str, current_message_id: str
+    ) -> list[dict]:
+        """安全拉取群聊历史，失败时返回空列表（不阻塞主流程）。"""
+        try:
+            history = await self._channel.fetch_chat_history(
+                chat_id, count=_GROUP_HISTORY_COUNT
+            )
+            # 排除当前消息（避免重复）
+            return [h for h in history if h.get("message_id") != current_message_id]
+        except Exception as e:
+            logger.debug(f"Failed to fetch chat history: {e}")
+            return []
+
+    @staticmethod
+    def _format_chat_history(history: list[dict]) -> str:
+        """将聊天记录格式化为 AI 可读的上下文。"""
+        lines = ["[Recent chat history]"]
+        for h in history:
+            name = h.get("sender_name", "unknown")
+            text = h.get("content", "")
+            lines.append(f"  {name}: {text}")
+        return "\n".join(lines)
 
     # -------------------------------------------------------------------------
     # 流式卡片
