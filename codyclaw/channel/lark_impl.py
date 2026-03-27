@@ -68,15 +68,22 @@ class LarkChannelImpl(LarkChannel):
         )
 
     def _run_ws_in_thread(self) -> None:
-        """在独立线程中运行 lark WebSocket 客户端。
+        """在独立线程中运行 lark WebSocket。
 
-        必须创建全新的 event loop 并 set 为当前线程的 loop，
-        否则 lark SDK 内部的 asyncio 调用会与主线程的 uvicorn loop 冲突。
-        使用 threading.Thread（非 run_in_executor）彻底隔离。
+        lark SDK 在 Client() 构造时就捕获当前线程的 event loop。
+        所以必须在线程内部创建 Client 和调用 start()，确保 SDK
+        拿到的是线程自己的 loop，而不是主线程的 uvicorn loop。
         """
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
+            # 必须在此线程内构造 Client（SDK 构造时绑定 event loop）
+            self._ws_client = lark.ws.Client(
+                self.config.app_id,
+                self.config.app_secret,
+                event_handler=self._event_handler,
+                log_level=lark.LogLevel.WARNING,
+            )
             self._ws_client.start()
         except Exception as e:
             self._last_error = str(e)
@@ -89,14 +96,7 @@ class LarkChannelImpl(LarkChannel):
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
-
-        self._ws_client = lark.ws.Client(
-            self.config.app_id,
-            self.config.app_secret,
-            event_handler=self._event_handler,
-            log_level=lark.LogLevel.WARNING,
-        )
-        # 用独立 daemon 线程（非 run_in_executor），彻底隔离 event loop
+        # Client 构造和 start() 都在独立线程里完成，避免 event loop 冲突
         self._ws_thread = threading.Thread(
             target=self._run_ws_in_thread, daemon=True, name="lark-ws"
         )
