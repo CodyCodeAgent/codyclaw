@@ -7,6 +7,78 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+  <!-- Setup Wizard (全屏遮罩，未配置时显示) -->
+  <div id="setup-overlay" class="setup-overlay" style="display:none">
+    <div class="setup-card">
+      <div class="setup-header">
+        <span class="brand-icon" style="width:40px;height:40px;font-size:20px">C</span>
+        <div>
+          <h1 style="font-size:22px;margin-bottom:2px">Welcome to CodyClaw</h1>
+          <p style="color:var(--text-secondary);font-size:13px">Complete the setup to get started</p>
+        </div>
+      </div>
+
+      <form id="setup-form" autocomplete="off">
+        <!-- Step 1: Lark -->
+        <div class="setup-section">
+          <h3>1. Feishu / Lark Application</h3>
+          <p class="setup-hint">Create an app at <a href="https://open.feishu.cn/" target="_blank">open.feishu.cn</a>, enable Bot with WebSocket mode.</p>
+          <div class="form-group">
+            <label for="s-lark-app-id">App ID <span class="required">*</span></label>
+            <input type="text" id="s-lark-app-id" placeholder="cli_xxxx" required>
+          </div>
+          <div class="form-group">
+            <label for="s-lark-app-secret">App Secret <span class="required">*</span></label>
+            <input type="password" id="s-lark-app-secret" placeholder="xxxx" required>
+          </div>
+          <div class="form-group">
+            <label for="s-lark-bot-id">Bot Open ID</label>
+            <input type="text" id="s-lark-bot-id" placeholder="ou_xxxx (for @mention detection)">
+          </div>
+        </div>
+
+        <!-- Step 2: LLM -->
+        <div class="setup-section">
+          <h3>2. LLM Provider</h3>
+          <div class="form-group">
+            <label for="s-api-key">API Key <span class="required">*</span></label>
+            <input type="password" id="s-api-key" placeholder="sk-ant-... or your provider's key" required>
+          </div>
+          <div class="form-group">
+            <label for="s-base-url">Base URL <span class="setup-hint-inline">(leave empty for Anthropic)</span></label>
+            <input type="text" id="s-base-url" placeholder="https://api.deepseek.com/v1">
+          </div>
+          <div class="form-group">
+            <label for="s-model">Model</label>
+            <input type="text" id="s-model" placeholder="claude-sonnet-4-20250514" value="claude-sonnet-4-20250514">
+          </div>
+        </div>
+
+        <!-- Step 3: Agent -->
+        <div class="setup-section">
+          <h3>3. Agent</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="s-agent-name">Name</label>
+              <input type="text" id="s-agent-name" placeholder="Assistant" value="Assistant">
+            </div>
+            <div class="form-group">
+              <label for="s-agent-workdir">Working Directory</label>
+              <input type="text" id="s-agent-workdir" placeholder="/home/user/workspace" value="/tmp">
+            </div>
+          </div>
+        </div>
+
+        <div id="setup-error" class="setup-error" style="display:none"></div>
+        <div id="setup-success" class="setup-success" style="display:none"></div>
+
+        <div class="setup-actions">
+          <button type="submit" class="btn btn-primary btn-lg" id="setup-submit">Save & Start</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <aside class="sidebar">
     <div class="sidebar-brand">
       <span class="brand-icon">C</span>

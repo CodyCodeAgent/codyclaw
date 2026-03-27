@@ -432,10 +432,84 @@ function esc(str) {
 }
 
 // ---------------------------------------------------------------------------
+// Setup Wizard
+// ---------------------------------------------------------------------------
+async function checkSetup() {
+  try {
+    const data = await fetchJSON(`${API}/setup/status`);
+    if (data.setup_mode || !data.configured) {
+      showSetup();
+      return true;
+    }
+  } catch { /* server not ready yet */ }
+  return false;
+}
+
+function showSetup() {
+  document.getElementById('setup-overlay').style.display = 'flex';
+  document.querySelector('.sidebar').style.display = 'none';
+  document.querySelector('.main').style.display = 'none';
+}
+
+function hideSetup() {
+  document.getElementById('setup-overlay').style.display = 'none';
+  document.querySelector('.sidebar').style.display = '';
+  document.querySelector('.main').style.display = '';
+}
+
+document.getElementById('setup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('setup-error');
+  const successEl = document.getElementById('setup-success');
+  const btn = document.getElementById('setup-submit');
+  errEl.style.display = 'none';
+  successEl.style.display = 'none';
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  const payload = {
+    lark_app_id: document.getElementById('s-lark-app-id').value,
+    lark_app_secret: document.getElementById('s-lark-app-secret').value,
+    lark_bot_open_id: document.getElementById('s-lark-bot-id').value,
+    api_key: document.getElementById('s-api-key').value,
+    base_url: document.getElementById('s-base-url').value,
+    agent_model: document.getElementById('s-model').value,
+    agent_name: document.getElementById('s-agent-name').value,
+    agent_workdir: document.getElementById('s-agent-workdir').value,
+  };
+
+  try {
+    const res = await fetch(`${API}/setup/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      errEl.textContent = data.error || 'Save failed';
+      errEl.style.display = 'block';
+    } else {
+      successEl.innerHTML = `${data.message}<br><br><strong>Please restart CodyClaw to connect to Feishu.</strong><br><code>codyclaw</code> or <code>docker compose restart</code>`;
+      successEl.style.display = 'block';
+      btn.textContent = 'Saved! Restart to apply';
+    }
+  } catch (err) {
+    errEl.textContent = `Network error: ${err.message}`;
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Save & Start';
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
-checkHealth();
-setInterval(checkHealth, 30000);
-loadDashboard();
-// Auto-connect event stream on load
-connectEventStream();
+(async function init() {
+  checkHealth();
+  setInterval(checkHealth, 30000);
+  const needsSetup = await checkSetup();
+  if (!needsSetup) {
+    loadDashboard();
+    connectEventStream();
+  }
+})();

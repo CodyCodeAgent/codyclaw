@@ -25,6 +25,85 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
+
+# ---------------------------------------------------------------------------
+# Setup wizard
+# ---------------------------------------------------------------------------
+
+@router.get("/setup/status")
+async def setup_status(req: Request):
+    """返回当前配置状态，前端据此决定是否显示 setup 向导。"""
+    from codyclaw.config import is_configured
+    config = req.app.state.config
+    setup_mode = getattr(req.app.state, "setup_mode", False)
+    return {
+        "setup_mode": setup_mode,
+        "configured": is_configured(config),
+        "config_path": getattr(req.app.state, "config_path", ""),
+    }
+
+
+@router.post("/setup/save")
+async def setup_save(req: Request):
+    """保存初始配置，写入 config.yaml。保存后需要重启生效。"""
+    from codyclaw.config import save_config_yaml
+
+    body = await req.json()
+    config_path = getattr(req.app.state, "config_path", "")
+    if not config_path:
+        return JSONResponse({"error": "config_path not set"}, status_code=500)
+
+    # 从表单构建配置
+    config_data = {
+        "lark": {
+            "app_id": body.get("lark_app_id", "").strip(),
+            "app_secret": body.get("lark_app_secret", "").strip(),
+            "bot_open_id": body.get("lark_bot_open_id", "").strip(),
+        },
+        "gateway": {
+            "host": body.get("gateway_host", "0.0.0.0").strip(),
+            "port": int(body.get("gateway_port", 8080)),
+            "log_level": body.get("gateway_log_level", "info").strip(),
+        },
+        "agents": [
+            {
+                "agent_id": body.get("agent_id", "assistant").strip() or "assistant",
+                "name": body.get("agent_name", "Assistant").strip() or "Assistant",
+                "workdir": body.get("agent_workdir", "/tmp").strip() or "/tmp",
+                "model": body.get("agent_model", "claude-sonnet-4-20250514").strip(),
+                "trigger_mode": "all",
+            },
+        ],
+        "default_agent": body.get("agent_id", "assistant").strip() or "assistant",
+        "cody": {},
+    }
+
+    # API Key — 支持 Anthropic 直连或第三方 base_url
+    api_key = body.get("api_key", "").strip()
+    base_url = body.get("base_url", "").strip()
+    if api_key:
+        config_data["cody"]["model_api_key"] = api_key
+    if base_url:
+        config_data["cody"]["base_url"] = base_url
+
+    # 验证必填项
+    lark = config_data["lark"]
+    if not lark["app_id"] or not lark["app_secret"]:
+        return JSONResponse(
+            {"error": "Lark App ID and App Secret are required"}, status_code=400
+        )
+
+    try:
+        save_config_yaml(config_path, config_data)
+    except Exception as e:
+        return JSONResponse({"error": f"Failed to save config: {e}"}, status_code=500)
+
+    return {
+        "status": "ok",
+        "message": "Configuration saved! Please restart CodyClaw to apply.",
+        "config_path": config_path,
+    }
+
 # ---------------------------------------------------------------------------
 # Chat history (in-memory ring buffer, persisted to DB on write)
 # ---------------------------------------------------------------------------
