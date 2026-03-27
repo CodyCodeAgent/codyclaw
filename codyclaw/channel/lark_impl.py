@@ -70,15 +70,20 @@ class LarkChannelImpl(LarkChannel):
     def _run_ws_in_thread(self) -> None:
         """在独立线程中运行 lark WebSocket。
 
-        lark SDK 内部存在嵌套的 asyncio event loop 调用
-        （run_until_complete 中再调 run_until_complete），
-        需要 nest_asyncio 补丁才能正常工作。
-        """
-        import nest_asyncio
+        lark SDK 的 ws.client 模块在 import 时就把 event loop 捕获到了
+        模块级变量 `loop` 中（第 25-29 行），之后 start() 里的
+        loop.run_until_complete() 都用那个 loop。如果 import 发生在
+        uvicorn 的 async 上下文中，loop 就是 uvicorn 正在运行的 loop，
+        导致 'this event loop is already running'。
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        nest_asyncio.apply(loop)
+        修复：创建新 event loop 后，直接替换 lark SDK 模块里的 loop 变量。
+        """
+        import lark_oapi.ws.client as ws_module
+
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        ws_module.loop = new_loop  # 替换 SDK 模块级的 loop 变量
+
         try:
             self._ws_client = lark.ws.Client(
                 self.config.app_id,
@@ -93,8 +98,6 @@ class LarkChannelImpl(LarkChannel):
         else:
             self._last_error = None
             logger.info("WebSocket connection closed normally")
-        finally:
-            loop.close()
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
