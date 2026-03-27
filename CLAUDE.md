@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CodyClaw is a Python gateway that connects Cody AI Agents to Feishu (Lark) via WebSocket. Users interact with AI agents through Feishu messages, group chats, and scheduled cron tasks. AI agents can dynamically create cron tasks via the `cron-manager` skill.
+CodyClaw is a Python gateway that connects Cody AI Agents to Feishu (Lark) via WebSocket. Users interact with AI agents through Feishu messages, group chats, and scheduled cron tasks. AI agents can dynamically create cron tasks via the `cron-manager` skill. A built-in Web console provides real-time chat, configuration management, and monitoring.
 
 ## Commands
 
@@ -13,30 +13,31 @@ CodyClaw is a Python gateway that connects Cody AI Agents to Feishu (Lark) via W
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Run (config loaded from ~/.codyclaw/config.yaml)
-export ANTHROPIC_API_KEY="sk-ant-..."
+# Run (first run auto-enters setup wizard if no config exists)
 codyclaw
 # or: python -m codyclaw.main
 
 # Lint
 ruff check codyclaw/
+# or: make lint
 
 # Run all tests
 pytest tests/ -v
+# or: make test
 
-# Run a single test
-pytest tests/test_router.py::test_function_name -v
+# Lint + tests together
+make check
 ```
 
 ## Architecture
 
-Four-layer design, all async (asyncio):
+Five-layer design, all async (asyncio):
 
 1. **Channel Layer** (`codyclaw/channel/`) — Feishu WebSocket adapter. Lark SDK runs in a separate thread, bridged to asyncio via `run_coroutine_threadsafe()`.
 
 2. **Gateway Layer** (`codyclaw/gateway/`) — Message routing and agent dispatch.
-   - `router.py`: Routes messages to agents based on chat type, user/group whitelists, and trigger mode (mention/all/prefix).
-   - `dispatcher.py`: Executes agents via Cody SDK streaming. Manages human-in-the-loop (message-based: user replies 允许/拒绝/全部允许) and throttles card updates (1.5s interval). Registers custom tools and skill directory when building each Cody client.
+   - `router.py`: Routes messages to agents based on chat type, user/group whitelists, and trigger mode (mention/all/prefix). `AgentConfig` supports per-agent `api_key` and `base_url` for third-party LLM providers.
+   - `dispatcher.py`: Executes agents via Cody SDK streaming. Manages human-in-the-loop (message-based: user replies 允许/拒绝/全部允许) and throttles card updates (1.5s interval). Registers custom tools and skill directory when building each Cody client. Applies global and per-agent `api_key`/`base_url`/`enable_thinking` config.
    - `session_strategy.py`: Per-user (P2P) or per-group session persistence with 24-hour idle timeout.
    - `tools.py`: Custom tool factory (`make_cron_tools`) — closures over `CronScheduler` for create/list/delete operations.
 
@@ -44,21 +45,33 @@ Four-layer design, all async (asyncio):
 
 4. **Skills** (`codyclaw/skills/`) — SKILL.md packages loaded by Cody SDK. Each skill guides the AI on when and how to use tools. Current skills: `feishu-notify`, `cron-manager`.
 
-5. **Database** (`codyclaw/db.py`) — SQLite via Python's built-in `sqlite3`. Stores AI-created cron tasks. Cody's own DB (sessions, memory) is stored per-agent under `~/.codyclaw/agents/{agent_id}/cody.db`.
+5. **Web Layer** (`codyclaw/web/`) — Web management console (vanilla HTML/CSS/JS SPA).
+   - `api.py`: FastAPI router with endpoints for setup wizard, real-time chat (SSE), config management, skills listing, event streaming, and dashboard stats.
+   - `static/`: Frontend SPA served at `/` with sidebar navigation.
 
-**Entry point**: `main.py` initializes DB → channel → router → event bus → dispatcher → cron → starts FastAPI + uvicorn.
+6. **Database** (`codyclaw/db.py`) — SQLite via Python's built-in `sqlite3`. Two tables:
+   - `cron_tasks`: AI-created cron tasks (persisted for restart recovery).
+   - `chat_messages`: Web chat history.
+   - Cody's own DB (sessions, memory) is stored per-agent under `~/.codyclaw/agents/{agent_id}/cody.db`.
 
-**Config**: Loaded from `~/.codyclaw/config.yaml`. Supports `${ENV_VAR}` expansion. `db_path` defaults to `~/.codyclaw/codyclaw.db`.
+**Entry point**: `main.py` detects configuration state:
+- **No config / incomplete config** → starts in **setup mode** (lightweight web-only, serves setup wizard at `/`).
+- **Config valid** → starts in **normal mode**: DB → channel → router → event bus → dispatcher → cron → FastAPI + uvicorn.
+
+**Config**: Loaded from `~/.codyclaw/config.yaml` via `load_config()` which returns `(CodyClawConfig, config_path)`. Supports `${ENV_VAR}` expansion. `is_configured()` checks if lark credentials and at least one agent are present. `db_path` defaults to `~/.codyclaw/codyclaw.db`.
 
 ## Key Patterns
 
+- **Setup mode**: When `is_configured()` returns False, `main()` creates a setup-only FastAPI app (no Feishu connection). The setup wizard saves config via `POST /api/setup/save` and auto-restarts the process with `os.execv()`.
 - **Human-in-the-loop**: Message-based (no card callbacks needed). Dispatcher holds `_user_pending: dict[str, str]` (user_id → request_id). `handle_message` intercepts 允许/拒绝/全部允许 before dispatching to agent.
 - **Cron persistence**: Static tasks from config.yaml are not persisted to DB (restored from config on restart). AI-created tasks (`persist=True`) are written to DB and reloaded on startup.
-- **Cody client setup**: Each agent gets its own `AsyncCodyClient` with skill_dir, custom tools, and db_path configured. Built lazily with double-checked locking (`asyncio.Lock`).
+- **Cody client setup**: Each agent gets its own `AsyncCodyClient` with skill_dir, custom tools, db_path, api_key, and base_url configured. Built lazily with double-checked locking (`asyncio.Lock`).
 - **Message deduplication**: LRU OrderedDict (1-hour window, 10K cap).
+- **Web chat**: SSE streaming via `POST /api/chat/send`. Auto-approves `InteractionRequestChunk` (web users are admins). Chat history persisted to `chat_messages` table.
 
 ## Code Style
 
 - Ruff rules: E, F, I (isort) with 100-char line length
 - Python 3.10+ (dataclasses, type hints, asyncio)
+- Use `Optional[str]` consistently (not `str | None`)
 - Tests use pytest-asyncio and monkeypatch for time-dependent tests

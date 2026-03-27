@@ -9,7 +9,20 @@ git clone https://github.com/CodyCodeAgent/codyclaw.git
 cd codyclaw
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+make dev       # 或: pip install -e ".[dev]"
+```
+
+## 常用命令
+
+```bash
+make dev       # 安装开发依赖
+make lint      # 运行 ruff linter
+make test      # 运行 pytest
+make check     # lint + tests（CI 等价）
+make run       # 启动 CodyClaw
+make docker    # 构建 Docker 镜像
+make clean     # 清理构建产物
+make help      # 查看所有命令
 ```
 
 ## 开发工作流
@@ -50,14 +63,24 @@ pip install -e ".[dev]"
 
 ## 项目结构
 
-新增功能请遵循四层架构：
+新增功能请遵循五层架构：
 
 | 层 | 目录 | 职责 |
 |----|------|------|
 | Channel | `codyclaw/channel/` | 飞书渠道适配 |
 | Gateway | `codyclaw/gateway/` | 消息路由与 Agent 调度 |
 | Automation | `codyclaw/automation/` | 定时任务、事件总线 |
+| Web | `codyclaw/web/` | Web 控制台（API + 前端 SPA） |
 | Skills | `codyclaw/skills/` | Agent 技能包 |
+
+### Web 前端
+
+前端为纯 HTML/CSS/JS SPA（无构建工具），位于 `codyclaw/web/static/`：
+- `index.html`：页面结构
+- `style.css`：样式（CSS 变量主题）
+- `app.js`：交互逻辑（fetch API + SSE）
+
+修改前端后无需编译，刷新页面即可。
 
 ## 添加新 Skill
 

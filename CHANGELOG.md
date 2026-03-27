@@ -8,29 +8,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Web management console at `http://localhost:8080/` with Dashboard, Chat, Agents, Skills, Cron Tasks, Sessions, Config, and Events pages
+- **Setup wizard**: First-run guided configuration via web UI — no manual YAML editing required
+  - Auto-detects missing config, starts in setup-only mode
+  - Step-by-step form with Chinese guidance text and operation hints
+  - "Test Connection" button validates Feishu credentials before saving
+  - Auto-restart after save (user never touches the terminal)
+  - Model dropdown with descriptions (Sonnet/Opus/Haiku) + custom input
+- **Web management console** at `http://localhost:8080/` with 8 pages:
+  Dashboard, Chat, Agents, Skills, Cron Tasks, Sessions, Config, Events
 - Real-time chat with agents via SSE streaming in web console
-- Live event stream (agent runs, cron executions) in web console
-- Per-agent `api_key` and `base_url` fields for third-party LLM providers (DeepSeek, Qwen, GLM, etc.)
+  - Welcome message with clickable suggestion chips
+  - Auto-approves InteractionRequestChunk (web users are admins)
+- Live event stream (agent runs, cron executions) via SSE
+- Dashboard status alerts: "Feishu Connected" / "Disconnected" with guidance
+- Config Quick Edit: edit API Key, Model, gateway settings from web UI
+  - `PUT /api/config/quick` endpoint for sensitive field updates
+- Feishu connection status in sidebar (real-time green/red indicator)
+- Per-agent `api_key` and `base_url` fields for third-party LLM providers
 - Global `enable_thinking` / `thinking_budget` configuration for Cody SDK
 - Chat history persistence to SQLite (`chat_messages` table)
-- `GET /api/skills` endpoint to list all skill packages
-- `GET /api/dashboard` endpoint for overview stats
-- `POST /api/chat/send` SSE endpoint for web chat
-- `GET /api/events/stream` SSE endpoint for live event monitoring
+- New API endpoints: `/api/dashboard`, `/api/skills`, `/api/config`,
+  `/api/config/quick`, `/api/chat/send`, `/api/chat/history`,
+  `/api/events/stream`, `/api/setup/status`, `/api/setup/save`,
+  `/api/setup/test-lark`
+- Open-source project files: LICENSE (Apache 2.0), CONTRIBUTING.md,
+  CHANGELOG.md, CODE_OF_CONDUCT.md, SECURITY.md
+- GitHub Actions CI (lint + test on Python 3.10-3.12)
+- Issue/PR templates for bug reports, feature requests
+- Dockerfile with non-root user, healthcheck, volume mount
+- docker-compose.yml for one-command deployment
+- Makefile with common dev commands (install, dev, lint, test, check, docker)
+- .editorconfig for consistent formatting
 
 ### Fixed
 - `config.py`: `db_path` from YAML was silently ignored (always used default)
+- `config.py`: `load_config` crashed with `FileNotFoundError` when no config
+  exists — now returns empty defaults and enters setup mode
 - `router.py`: Default agent did not check `trigger_mode` for group messages
 - `dispatcher.py`: `_user_pending` not cleaned up on interaction timeout
-- `cron.py`: `_parse_interval` crashed on malformed interval strings (e.g., "abc3h")
+- `cron.py`: `_parse_interval` crashed on malformed interval strings
 - `lark_impl.py`: `update_card` silently ignored API failures
 - `cards.py`: Content truncation at 4096 chars was silent (now shows indicator)
+- `web/api.py`: Flask-style `return dict, 404` pattern (FastAPI ignores status)
+- `web/api.py`: Chat history used `list.pop(0)` O(n) — replaced with `deque`
+- `web/api.py`: Web chat hung on `InteractionRequestChunk` (now auto-approves)
+- `web/api.py`: `load_chat_messages()` was dead code (now used as DB fallback)
+- `app.js`: Config page `input` listener registered on every visit (leak)
+- `app.js`: Config "Save" button was non-functional (just showed alert)
+- `app.js`: Unescaped `agent_id` in HTML attribute (potential injection)
 
 ### Changed
-- `download_resource` parameter renamed from `type` to `resource_type` (was shadowing Python builtin)
-- All import blocks sorted per ruff isort rules
+- `download_resource` parameter renamed from `type` to `resource_type`
+- `load_config` returns `(CodyClawConfig, str)` tuple instead of just config
 - Added `TYPE_CHECKING` imports to `boot.py`, `cron.py`, `lark_impl.py`, `router.py`
+- All import blocks sorted per ruff isort rules
+- Removed unused imports across codebase
+- Added public methods to `AgentDispatcher`: `get_session()`, `set_session()`,
+  `active_run_count` property (replaced private attribute access)
 
 ## [0.1.0] - 2025-03-01
 
