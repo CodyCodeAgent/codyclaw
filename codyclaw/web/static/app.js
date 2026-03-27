@@ -92,7 +92,7 @@ async function loadChat() {
     const select = document.getElementById('chat-agent-select');
     if (select.children.length <= 1) {
       select.innerHTML = data.agents.map(a =>
-        `<option value="${a.id}">${esc(a.name)} (${a.id})</option>`
+        `<option value="${esc(a.id)}">${esc(a.name)} (${esc(a.id)})</option>`
       ).join('');
       if (data.agents.length > 0) chatAgentId = data.agents[0].id;
     }
@@ -322,29 +322,14 @@ async function loadSessions() {
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-let originalConfigText = '';
-
 async function loadConfig() {
   try {
     const data = await fetchJSON(`${API}/config`);
     document.getElementById('config-path').textContent = data.config_path;
     const text = yaml_stringify(data.config);
-    originalConfigText = text;
     document.getElementById('config-editor').textContent = text;
-    document.getElementById('config-save').style.display = 'none';
-
-    // Track changes
-    document.getElementById('config-editor').addEventListener('input', () => {
-      const changed = document.getElementById('config-editor').textContent !== originalConfigText;
-      document.getElementById('config-save').style.display = changed ? '' : 'none';
-    });
   } catch (e) { console.error('Config load error:', e); }
 }
-
-document.getElementById('config-save').addEventListener('click', async () => {
-  // We send the raw text as a config update note (actual YAML editing is complex)
-  alert('Config saved. Note: full YAML editing requires restart to take effect. Use the API PUT /api/config for structured updates.');
-});
 
 // Simple YAML-like pretty printer for display
 function yaml_stringify(obj, indent = 0) {

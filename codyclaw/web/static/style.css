@@ -338,11 +338,9 @@ tr:hover td { background: #f9fafb; }
   background: #f9fafb;
   border: 1px solid var(--border);
   border-radius: 6px;
-  outline: none;
   min-height: 300px;
   tab-size: 2;
 }
-.config-code:focus { border-color: var(--primary); }
 
 /* Skills */
 .skill-card {
