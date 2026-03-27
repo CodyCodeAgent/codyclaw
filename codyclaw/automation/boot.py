@@ -3,6 +3,12 @@
 import logging
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from codyclaw.automation.events import EventBus
+    from codyclaw.gateway.dispatcher import AgentDispatcher
+    from codyclaw.gateway.router import MessageRouter
 
 logger = logging.getLogger(__name__)
 

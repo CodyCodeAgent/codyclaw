@@ -2,7 +2,8 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional, Callable, Awaitable
+from typing import Awaitable, Callable, Optional
+
 
 @dataclass
 class IncomingMessage:
@@ -56,7 +57,9 @@ class LarkChannel(ABC):
         """发送文件，返回 message_id"""
 
     @abstractmethod
-    async def download_resource(self, message_id: str, file_key: str, type: str = "image") -> bytes:
+    async def download_resource(
+        self, message_id: str, file_key: str, resource_type: str = "image"
+    ) -> bytes:
         """下载消息中的图片/文件资源"""
 
     @abstractmethod

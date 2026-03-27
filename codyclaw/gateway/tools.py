@@ -74,7 +74,9 @@ def make_cron_tools(get_scheduler):
         for task in scheduler.tasks.values():
             job = scheduler.get_job(task.task_id)
             next_run = (
-                job.next_run_time.strftime("%Y-%m-%d %H:%M") if job and job.next_run_time else "disabled"
+                job.next_run_time.strftime("%Y-%m-%d %H:%M")
+                if job and job.next_run_time
+                else "disabled"
             )
             tasks.append({
                 "task_id": task.task_id,

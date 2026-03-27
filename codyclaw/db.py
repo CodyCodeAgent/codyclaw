@@ -3,8 +3,8 @@
 # SQLite 数据库初始化与 CRUD。
 # 所有操作均为同步（SQLite 极快，且这些操作不在热路径上）。
 
-import sqlite3
 import logging
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 

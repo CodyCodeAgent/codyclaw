@@ -1,15 +1,16 @@
 # codyclaw/config.py
 
 import dataclasses
+import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
-import yaml
-import os
-import re
 
-from codyclaw.gateway.router import AgentConfig
+import yaml
+
 from codyclaw.automation.cron import CronTask
+from codyclaw.gateway.router import AgentConfig
 
 
 @dataclass
@@ -92,6 +93,9 @@ def load_config(path: Optional[str] = None) -> CodyClawConfig:
 
     if "cody" in raw:
         config.cody = raw["cody"]
+
+    if "db_path" in raw:
+        config.db_path = raw["db_path"]
 
     if not config.db_path:
         config.db_path = str(Path.home() / ".codyclaw" / "codyclaw.db")

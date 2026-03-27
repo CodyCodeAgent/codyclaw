@@ -1,5 +1,16 @@
 # codyclaw/channel/cards.py
 
+_CARD_CONTENT_LIMIT = 4096
+_TRUNCATION_SUFFIX = "\n\n...(内容过长，已截断)"
+
+
+def _truncate(content: str) -> str:
+    """截断超出飞书卡片限制的内容，并附加提示。"""
+    if len(content) <= _CARD_CONTENT_LIMIT:
+        return content
+    return content[: _CARD_CONTENT_LIMIT - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
+
+
 def build_streaming_card(title: str, content: str, status: str = "running") -> dict:
     """构建流式输出卡片——Agent 执行过程中实时更新"""
     status_emoji = {"running": "⏳", "done": "✅", "error": "❌"}.get(status, "ℹ️")
@@ -14,7 +25,7 @@ def build_streaming_card(title: str, content: str, status: str = "running") -> d
         "elements": [
             {
                 "tag": "markdown",
-                "content": content[:4096],  # 飞书卡片内容上限
+                "content": _truncate(content),
             },
             # 运行中时显示取消提示
             *([{
@@ -55,7 +66,7 @@ def build_cron_result_card(task_name: str, result: str, next_run: str) -> dict:
             "template": "turquoise",
         },
         "elements": [
-            {"tag": "markdown", "content": result[:4096]},
+            {"tag": "markdown", "content": _truncate(result)},
             {"tag": "note", "elements": [
                 {"tag": "plain_text", "content": f"下次执行: {next_run}"},
             ]},

@@ -2,14 +2,19 @@
 
 import logging
 import uuid
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from codyclaw.channel.cards import build_cron_result_card
-from codyclaw.db import save_cron_task, delete_cron_task
+from codyclaw.db import delete_cron_task, save_cron_task
+
+if TYPE_CHECKING:
+    from codyclaw.channel.base import LarkChannel
+    from codyclaw.gateway.dispatcher import AgentDispatcher
 
 logger = logging.getLogger(__name__)
 

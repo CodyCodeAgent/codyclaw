@@ -19,7 +19,9 @@ agents:
   - agent_id: "assistant"
     name: "通用助手"
     workdir: "/home/user/workspace"
-    model: "claude-sonnet-4-20250514"
+    model: "claude-sonnet-4-0"
+    # api_key: "${ANTHROPIC_API_KEY}"  # 可选，覆盖全局 cody.model_api_key
+    # base_url: ""                     # 可选，使用第三方兼容接口时填写
     trigger_mode: "all"                # 单聊直接响应
     description: "通用编程助手，可以读写文件、执行命令"
 
@@ -30,6 +32,17 @@ agents:
     trigger_mode: "mention"            # 群聊需 @
     allowed_groups: ["oc_xxx"]         # 限定运维群
     description: "服务器监控和告警处理"
+
+  # 示例：使用第三方兼容接口（如 DeepSeek）
+  # - agent_id: "deepseek"
+  #   name: "DeepSeek 助手"
+  #   workdir: "/home/user/workspace"
+  #   model: "deepseek-chat"
+  #   api_key: "${DEEPSEEK_API_KEY}"
+  #   base_url: "https://api.deepseek.com/v1"
+  #   trigger_mode: "prefix"
+  #   prefix: "ds:"
+  #   description: "DeepSeek 驱动的助手"
 
 default_agent: "assistant"
 
@@ -49,10 +62,13 @@ cron_tasks:
     schedule: "every 30m"              # 每 30 分钟
     notify_chat_id: "oc_xxx"
 
-# --- 全局 Cody 配置覆盖 ---
+# --- 全局 Cody 配置 ---
 cody:
-  model_api_key: "${ANTHROPIC_API_KEY}"  # 支持环境变量引用
+  model_api_key: "${ANTHROPIC_API_KEY}"  # 全局 API Key，支持环境变量引用
+  # api_key: "${ANTHROPIC_API_KEY}"      # 与 model_api_key 等价，新写法
+  # base_url: ""                         # 全局 base_url（各 Agent 可单独覆盖）
   enable_thinking: false
+  # thinking_budget: 10000               # enable_thinking=true 时的 token 预算
   security:
     command_timeout: 60
     blocked_commands: ["rm -rf /", "mkfs", "dd if="]

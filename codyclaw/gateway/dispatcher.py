@@ -4,21 +4,20 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from cody import AsyncCodyClient, Cody
-from cody.sdk.types import TextDeltaChunk, ToolCallChunk
-from cody.sdk.types import DoneChunk, InteractionRequestChunk
+from cody.sdk.types import DoneChunk, InteractionRequestChunk, TextDeltaChunk, ToolCallChunk
 
-from codyclaw.channel.cards import build_streaming_card, build_approval_card
+from codyclaw.automation.events import Event, EventBus, EventType
+from codyclaw.channel.cards import build_approval_card, build_streaming_card
 from codyclaw.gateway.session_strategy import SessionManager
 from codyclaw.gateway.tools import make_cron_tools
-from codyclaw.automation.events import EventBus, Event, EventType
 
 if TYPE_CHECKING:
-    from codyclaw.channel.base import LarkChannel, IncomingMessage
-    from codyclaw.gateway.router import MessageRouter, AgentConfig
     from codyclaw.automation.cron import CronScheduler
+    from codyclaw.channel.base import IncomingMessage, LarkChannel
+    from codyclaw.gateway.router import AgentConfig, MessageRouter
 
 _SKILLS_DIR = str(Path(__file__).parent.parent / "skills")
 
@@ -113,6 +112,11 @@ class AgentDispatcher:
                 for tool in self._cron_tools:
                     builder = builder.tool(tool)
                 builder = self._apply_cody_config(builder, self._cody_config)
+                # 每个 Agent 的 api_key/base_url 优先级高于全局 cody 配置
+                if agent_config.api_key and hasattr(builder, "api_key"):
+                    builder = builder.api_key(agent_config.api_key)
+                if agent_config.base_url and hasattr(builder, "base_url"):
+                    builder = builder.base_url(agent_config.base_url)
                 client = builder.build()
                 await client.__aenter__()
                 self._clients[agent_id] = client
@@ -122,6 +126,20 @@ class AgentDispatcher:
         """将 config.yaml 的安全/权限配置应用到 Cody builder。
         使用 hasattr 安全检测，跳过当前 SDK 版本不支持的选项。
         """
+        # 全局 API Key（model_api_key 优先，向后兼容；api_key 为新键）
+        api_key = cody_config.get("model_api_key") or cody_config.get("api_key")
+        if api_key and hasattr(builder, "api_key"):
+            builder = builder.api_key(api_key)
+
+        base_url = cody_config.get("base_url")
+        if base_url and hasattr(builder, "base_url"):
+            builder = builder.base_url(base_url)
+
+        enable_thinking = cody_config.get("enable_thinking")
+        if enable_thinking is not None and hasattr(builder, "thinking"):
+            thinking_budget = cody_config.get("thinking_budget", 10000)
+            builder = builder.thinking(enable_thinking, thinking_budget)
+
         security = cody_config.get("security", {})
 
         blocked = security.get("blocked_commands")
@@ -362,6 +380,7 @@ class AgentDispatcher:
             await asyncio.wait_for(asyncio.shield(future), timeout=_INTERACTION_TIMEOUT)
         except asyncio.TimeoutError:
             self._pending_interactions.pop(chunk.request_id, None)
+            self._user_pending.pop(run.user_id, None)
             if not future.done():
                 future.cancel()
             raise RuntimeError(f"审批超时（{int(_INTERACTION_TIMEOUT // 60)} 分钟），操作已取消")

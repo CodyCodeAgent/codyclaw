@@ -3,6 +3,7 @@
 import time
 from collections import OrderedDict
 
+
 class MessageDeduplicator:
     """基于 event_id 的消息去重器，滑动窗口 1 小时"""
 

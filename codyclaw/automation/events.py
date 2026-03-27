@@ -1,10 +1,9 @@
 # codyclaw/automation/events.py
 
-import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Awaitable, Any
 from enum import Enum
+from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 

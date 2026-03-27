@@ -4,18 +4,18 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
 import uvicorn
+from fastapi import FastAPI, Request
 
-from codyclaw.config import load_config, CodyClawConfig
-from codyclaw.db import init_db, load_cron_tasks
-from codyclaw.channel.lark_impl import LarkChannelImpl
-from codyclaw.channel.dedup import MessageDeduplicator
-from codyclaw.gateway.router import MessageRouter
-from codyclaw.gateway.dispatcher import AgentDispatcher
-from codyclaw.automation.cron import CronScheduler, CronTask
-from codyclaw.automation.events import EventBus, EventType, Event
 from codyclaw.automation.boot import execute_boot_scripts
+from codyclaw.automation.cron import CronScheduler, CronTask
+from codyclaw.automation.events import Event, EventBus, EventType
+from codyclaw.channel.dedup import MessageDeduplicator
+from codyclaw.channel.lark_impl import LarkChannelImpl
+from codyclaw.config import CodyClawConfig, load_config
+from codyclaw.db import init_db, load_cron_tasks
+from codyclaw.gateway.dispatcher import AgentDispatcher
+from codyclaw.gateway.router import MessageRouter
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from collections import OrderedDict
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import lark_oapi as lark
 from lark_oapi.api.contact.v3 import GetUserRequest
@@ -15,12 +15,15 @@ from lark_oapi.api.im.v1 import (
     CreateMessageRequest,
     CreateMessageRequestBody,
     GetMessageResourceRequest,
+    P2ImMessageReceiveV1,
     PatchMessageRequest,
     PatchMessageRequestBody,
-    P2ImMessageReceiveV1,
 )
 
-from codyclaw.channel.base import LarkChannel, IncomingMessage, MessageHandler
+from codyclaw.channel.base import IncomingMessage, LarkChannel, MessageHandler
+
+if TYPE_CHECKING:
+    from codyclaw.config import LarkConfig
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +37,7 @@ class LarkChannelImpl(LarkChannel):
         self.config = config
         self._handlers: list[MessageHandler] = []
         self._ws_client = None
-        self._ws_future = None                               # executor future，用于错误监控和 stop()
+        self._ws_future = None  # executor future，用于错误监控和 stop()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._user_name_cache: OrderedDict[str, str] = OrderedDict()  # open_id → name（LRU）
 
@@ -158,7 +161,9 @@ class LarkChannelImpl(LarkChannel):
         if msg.message_type == "image":
             image_key = content_json.get("image_key", "")
             if image_key:
-                data = await self.download_resource(msg.message_id, image_key, type="image")
+                data = await self.download_resource(
+                    msg.message_id, image_key, resource_type="image"
+                )
                 incoming.images.append(data)
 
         for handler in self._handlers:
@@ -260,15 +265,15 @@ class LarkChannelImpl(LarkChannel):
         return response.data.message_id
 
     async def download_resource(
-        self, message_id: str, file_key: str, type: str = "image"
+        self, message_id: str, file_key: str, resource_type: str = "image"
     ) -> bytes:
         """下载消息中的图片或文件资源。
-        type: "image" | "file"
+        resource_type: "image" | "file"
         """
         request = GetMessageResourceRequest.builder() \
             .message_id(message_id) \
             .file_key(file_key) \
-            .type(type) \
+            .type(resource_type) \
             .build()
 
         loop = asyncio.get_running_loop()
@@ -290,9 +295,11 @@ class LarkChannelImpl(LarkChannel):
             .build()
 
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
+        response = await loop.run_in_executor(
             None, lambda: self._client.im.v1.message.patch(request)
         )
+        if not response.success():
+            raise RuntimeError(f"update_card failed: {response.msg}")
 
     def on_message(self, handler: MessageHandler) -> None:
         self._handlers.append(handler)
