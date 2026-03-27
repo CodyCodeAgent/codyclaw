@@ -58,13 +58,20 @@ class LarkChannelImpl(LarkChannel):
             self._sync_on_message_event
         ).build()
 
-    def _sync_on_message_event(self, ctx, event: P2ImMessageReceiveV1) -> None:
-        """同步包装器：lark SDK 线程 → asyncio 事件循环桥接。"""
+    def _sync_on_message_event(self, *args) -> None:
+        """同步包装器：lark SDK 线程 → asyncio 事件循环桥接。
+
+        WebSocket 模式下 SDK 只传 event 一个参数（无 ctx），
+        Webhook 模式下传 ctx + event 两个参数。兼容两种调用方式。
+        """
         if self._loop is None:
             logger.warning("Event loop not initialized, dropping message")
             return
+        event = args[-1] if args else None
+        if event is None:
+            return
         asyncio.run_coroutine_threadsafe(
-            self._on_message_event(ctx, event), self._loop
+            self._on_message_event(event), self._loop
         )
 
     def _run_ws_in_thread(self) -> None:
@@ -146,7 +153,7 @@ class LarkChannelImpl(LarkChannel):
             self._user_name_cache.popitem(last=False)  # 淘汰最久未使用的条目
         return name
 
-    async def _on_message_event(self, ctx, event: P2ImMessageReceiveV1) -> None:
+    async def _on_message_event(self, event: P2ImMessageReceiveV1) -> None:
         """处理飞书消息事件（在 asyncio 事件循环中执行）"""
         msg = event.event.message
         content_json = json.loads(msg.content)
