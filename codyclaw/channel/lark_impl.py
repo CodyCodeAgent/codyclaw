@@ -80,6 +80,16 @@ class LarkChannelImpl(LarkChannel):
             self._last_error = None
             logger.info("WebSocket connection closed")
 
+    def _run_ws_blocking(self) -> None:
+        """在独立线程中运行 lark WebSocket 客户端。
+
+        lark SDK 的 start() 内部会创建/使用 asyncio 事件循环。
+        必须为线程设置一个全新的 event loop，否则会和主线程的 uvicorn loop 冲突
+        （'this event loop is already running' 错误）。
+        """
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        self._ws_client.start()
+
     async def start(self) -> None:
         # 保存事件循环引用，供 _sync_on_message_event 跨线程使用
         self._loop = asyncio.get_running_loop()
@@ -90,8 +100,8 @@ class LarkChannelImpl(LarkChannel):
             event_handler=self._event_handler,
             log_level=lark.LogLevel.WARNING,
         )
-        # start() 是阻塞调用，放到线程池避免阻塞事件循环
-        self._ws_future = self._loop.run_in_executor(None, self._ws_client.start)
+        # start() 是阻塞调用，放到线程池并给线程一个独立的 event loop
+        self._ws_future = self._loop.run_in_executor(None, self._run_ws_blocking)
         self._ws_future.add_done_callback(self._on_ws_done)
 
     @property
