@@ -501,9 +501,25 @@ async def chat_history(
 # Events (SSE live feed)
 # ---------------------------------------------------------------------------
 
+_MAX_EVENT_HISTORY = 200
+_event_history: deque[dict] = deque(maxlen=_MAX_EVENT_HISTORY)
+
+
+async def _record_event(event: Event) -> dict:
+    """将事件记录到历史缓冲并返回序列化后的 dict。"""
+    item = {
+        "type": str(event.type.value),
+        "data": event.data,
+        "source": event.source,
+        "time": time.strftime("%H:%M:%S"),
+    }
+    _event_history.append(item)
+    return item
+
+
 @router.get("/events/stream")
 async def events_stream(req: Request):
-    """SSE 实时事件流（Agent 运行状态、Cron 执行等）。"""
+    """SSE 实时事件流（Agent 运行状态、Cron 执行等）。连接后先回放最近事件。"""
     import asyncio
 
     event_bus = req.app.state.event_bus
@@ -525,6 +541,9 @@ async def events_stream(req: Request):
         event_bus.on(prefix, handler)
 
     async def stream():
+        # 先回放历史事件
+        for item in list(_event_history):
+            yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
         try:
             while True:
                 try:

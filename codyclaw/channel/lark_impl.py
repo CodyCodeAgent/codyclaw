@@ -13,13 +13,19 @@ from lark_oapi.api.contact.v3 import GetUserRequest
 from lark_oapi.api.im.v1 import (
     CreateFileRequest,
     CreateFileRequestBody,
+    CreateMessageReactionRequest,
+    CreateMessageReactionRequestBody,
     CreateMessageRequest,
     CreateMessageRequestBody,
+    DeleteMessageReactionRequest,
     GetMessageResourceRequest,
     P2ImMessageReceiveV1,
     PatchMessageRequest,
     PatchMessageRequestBody,
+    ReplyMessageRequest,
+    ReplyMessageRequestBody,
 )
+from lark_oapi.api.im.v1.model.emoji import Emoji
 
 from codyclaw.channel.base import IncomingMessage, LarkChannel, MessageHandler
 
@@ -163,10 +169,14 @@ class LarkChannelImpl(LarkChannel):
         is_mention_bot = False
         if msg.mentions:
             for m in msg.mentions:
-                mentions.append(m.id.open_id)
-                if m.id.open_id == self.config.bot_open_id:
+                open_id = m.id.open_id
+                display_name = m.name or open_id
+                if open_id == self.config.bot_open_id:
                     is_mention_bot = True
                     text = text.replace(f"@_user_{m.key}", "").strip()
+                else:
+                    mentions.append({"name": display_name, "open_id": open_id})
+                    text = text.replace(f"@_user_{m.key}", f"@{display_name}")
 
         sender_open_id = event.event.sender.sender_id.open_id
         sender_name = await self._fetch_user_name(sender_open_id)
@@ -197,14 +207,15 @@ class LarkChannelImpl(LarkChannel):
 
     async def send_text(self, chat_id: str, text: str, reply_to: Optional[str] = None) -> str:
         """发送文本消息"""
-        body_builder = CreateMessageRequestBody.builder() \
+        content = json.dumps({"text": text})
+        if reply_to:
+            return await self._reply_message(reply_to, "text", content)
+
+        body = CreateMessageRequestBody.builder() \
             .receive_id(chat_id) \
             .msg_type("text") \
-            .content(json.dumps({"text": text}))
-        if reply_to:
-            body_builder = body_builder.quote_message_id(reply_to)
-        body = body_builder.build()
-
+            .content(content) \
+            .build()
         request = CreateMessageRequest.builder() \
             .receive_id_type("chat_id") \
             .request_body(body) \
@@ -220,14 +231,15 @@ class LarkChannelImpl(LarkChannel):
 
     async def send_card(self, chat_id: str, card: dict, reply_to: Optional[str] = None) -> str:
         """发送交互卡片（支持 Markdown 渲染）"""
-        body_builder = CreateMessageRequestBody.builder() \
+        content = json.dumps(card)
+        if reply_to:
+            return await self._reply_message(reply_to, "interactive", content)
+
+        body = CreateMessageRequestBody.builder() \
             .receive_id(chat_id) \
             .msg_type("interactive") \
-            .content(json.dumps(card))
-        if reply_to:
-            body_builder = body_builder.quote_message_id(reply_to)
-        body = body_builder.build()
-
+            .content(content) \
+            .build()
         request = CreateMessageRequest.builder() \
             .receive_id_type("chat_id") \
             .request_body(body) \
@@ -239,6 +251,25 @@ class LarkChannelImpl(LarkChannel):
         )
         if not response.success():
             raise RuntimeError(f"send_card failed: {response.msg}")
+        return response.data.message_id
+
+    async def _reply_message(self, message_id: str, msg_type: str, content: str) -> str:
+        """回复指定消息（使用 Reply API: POST /messages/:message_id/reply）"""
+        body = ReplyMessageRequestBody.builder() \
+            .msg_type(msg_type) \
+            .content(content) \
+            .build()
+        request = ReplyMessageRequest.builder() \
+            .message_id(message_id) \
+            .request_body(body) \
+            .build()
+
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: self._client.im.v1.message.reply(request)
+        )
+        if not response.success():
+            raise RuntimeError(f"reply_message failed: {response.msg}")
         return response.data.message_id
 
     async def send_file(self, chat_id: str, file_path: str, file_name: str) -> str:
@@ -326,6 +357,39 @@ class LarkChannelImpl(LarkChannel):
         )
         if not response.success():
             raise RuntimeError(f"update_card failed: {response.msg}")
+
+    async def add_reaction(self, message_id: str, emoji_type: str) -> str:
+        """给消息添加表情回应，返回 reaction_id"""
+        emoji = Emoji.builder().emoji_type(emoji_type).build()
+        body = CreateMessageReactionRequestBody.builder() \
+            .reaction_type(emoji) \
+            .build()
+        request = CreateMessageReactionRequest.builder() \
+            .message_id(message_id) \
+            .request_body(body) \
+            .build()
+
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: self._client.im.v1.message_reaction.create(request)
+        )
+        if not response.success():
+            raise RuntimeError(f"add_reaction failed: {response.msg}")
+        return response.data.reaction_id
+
+    async def remove_reaction(self, message_id: str, reaction_id: str) -> None:
+        """移除消息上的表情回应"""
+        request = DeleteMessageReactionRequest.builder() \
+            .message_id(message_id) \
+            .reaction_id(reaction_id) \
+            .build()
+
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: self._client.im.v1.message_reaction.delete(request)
+        )
+        if not response.success():
+            raise RuntimeError(f"remove_reaction failed: {response.msg}")
 
     def on_message(self, handler: MessageHandler) -> None:
         self._handlers.append(handler)

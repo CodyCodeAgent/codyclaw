@@ -10,9 +10,9 @@ from cody import AsyncCodyClient, Cody
 from cody.sdk.types import DoneChunk, InteractionRequestChunk, TextDeltaChunk, ToolCallChunk
 
 from codyclaw.automation.events import Event, EventBus, EventType
-from codyclaw.channel.cards import build_approval_card, build_streaming_card
+from codyclaw.channel.cards import build_streaming_card
 from codyclaw.gateway.session_strategy import SessionManager
-from codyclaw.gateway.tools import make_cron_tools
+from codyclaw.gateway.tools import make_cron_tools, make_feishu_tools
 
 if TYPE_CHECKING:
     from codyclaw.automation.cron import CronScheduler
@@ -28,7 +28,33 @@ _CARD_TITLE = {
     "done": "执行完成",
     "error": "执行出错",
 }
-_INTERACTION_TIMEOUT = 300.0  # 审批超时秒数（5 分钟）
+
+_FEISHU_SYSTEM_PROMPT = """\
+你是一个运行在飞书中的 AI 助手。用户通过飞书消息与你对话。
+
+## 重要规则
+
+1. 你的纯文本输出用户**完全看不到**。你必须通过 feishu 工具发送消息。
+2. 每条用户消息开头有 [Feishu context]，包含 chat_id、message_id、sender_name、mentions 等信息。
+
+## 回复方式
+
+- 简短回复：用 feishu_reply(message_id, text) 引用回复
+- 长回复/格式化内容：用 feishu_send_card(chat_id, title, content) 发送卡片（支持 Markdown）
+- 表情回应：用 feishu_add_reaction(message_id, emoji_type)
+
+## @提及他人
+
+在消息文本中用 `<at user_id="open_id">名字</at>` 格式来 @某人。
+open_id 从 [Feishu context] 的 mentions 字段获取。
+例如：`<at user_id="ou_abc123">小明</at> 你好！`
+
+## 行为准则
+
+- 自然对话，不要机械地复述你的能力
+- 在群聊中注意区分谁在说话、谁被@了
+- 直接回答问题或执行任务，不要解释你是怎么工作的
+"""
 
 
 @dataclass
@@ -37,18 +63,9 @@ class ActiveRun:
     user_id: str
     chat_id: str
     agent_id: str
-    card_message_id: Optional[str] = None    # 流式输出卡片的 message_id
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     accumulated_text: str = ""
-    auto_approve: bool = False               # 用户已授权本次 session 所有 CONFIRM 操作
-
-
-@dataclass
-class PendingInteraction:
-    """等待用户审批的 human-in-the-loop 请求"""
-    future: asyncio.Future
-    client: AsyncCodyClient
-    user_id: str                             # 用于 approve_all 时定位对应的 ActiveRun
+    source_message_id: Optional[str] = None  # 用户原始消息 ID
 
 
 class AgentDispatcher:
@@ -71,11 +88,9 @@ class AgentDispatcher:
         self._clients: dict[str, AsyncCodyClient] = {}          # agent_id → client
         self._client_locks: dict[str, asyncio.Lock] = {}        # agent_id → Lock（防竞态）
         self._sessions = SessionManager()                       # 会话生命周期管理
-        self._pending_interactions: dict[str, PendingInteraction] = {}
-        self._user_pending: dict[str, str] = {}              # user_id → request_id
-        self._card_update_interval = 1.5  # 飞书卡片更新节流（秒）
         self._cron_scheduler: Optional["CronScheduler"] = None
         self._cron_tools = make_cron_tools(lambda: self._cron_scheduler)
+        self._feishu_tools = make_feishu_tools(lambda: self._channel)
 
     # -------------------------------------------------------------------------
     # Client 管理
@@ -96,13 +111,14 @@ class AgentDispatcher:
                     Cody()
                     .workdir(agent_config.workdir)
                     .model(agent_config.model)
-                    .interaction(enabled=True, timeout=_INTERACTION_TIMEOUT)
+                    .interaction(enabled=False)
                     .circuit_breaker(
                         max_tokens=cb.get("max_tokens", 500_000),
                         max_cost_usd=cb.get("max_cost_usd", 2.0),
                         loop_detect_turns=cb.get("loop_detect_turns", 6),
                     )
                     .skill_dir(_SKILLS_DIR)
+                    .extra_system_prompt(_FEISHU_SYSTEM_PROMPT)
                 )
                 if self._db_path:
                     cody_db = str(
@@ -110,6 +126,8 @@ class AgentDispatcher:
                     )
                     builder = builder.db_path(cody_db)
                 for tool in self._cron_tools:
+                    builder = builder.tool(tool)
+                for tool in self._feishu_tools:
                     builder = builder.tool(tool)
                 builder = self._apply_cody_config(builder, self._cody_config)
                 # 每个 Agent 的 api_key/base_url 优先级高于全局 cody 配置
@@ -182,14 +200,6 @@ class AgentDispatcher:
         if agent_config is None:
             return
 
-        if msg.sender_id in self._active_runs:
-            await self._channel.send_text(
-                msg.chat_id,
-                "上一个任务还在执行中，请稍候或发送「取消」终止。",
-                reply_to=msg.message_id,
-            )
-            return
-
         client = await self.get_or_create_client(agent_config)
         session_key = self._get_session_key(agent_config, msg)
         session_id = self._sessions.get(session_key)
@@ -198,6 +208,7 @@ class AgentDispatcher:
             user_id=msg.sender_id,
             chat_id=msg.chat_id,
             agent_id=agent_config.agent_id,
+            source_message_id=msg.message_id,
         )
         self._active_runs[msg.sender_id] = run
 
@@ -206,32 +217,30 @@ class AgentDispatcher:
             "user_id": msg.sender_id,
         })
 
+        # 立刻打 🤔 表情，告诉用户消息已收到
+        reaction_id = await self._add_reaction_safe(msg.message_id, "THINKING")
+
+        # 注入飞书上下文，让 AI 知道当前对话环境
+        mentions_str = ""
+        if msg.mentions:
+            mention_parts = [f'{m["name"]}(open_id={m["open_id"]})' for m in msg.mentions]
+            mentions_str = f" mentions=[{', '.join(mention_parts)}]"
+        context = (
+            f"[Feishu context] chat_id={msg.chat_id} message_id={msg.message_id} "
+            f"chat_type={msg.chat_type} sender_name={msg.sender_name}{mentions_str}\n\n"
+            f"{msg.content}"
+        )
+
         try:
-            card = build_streaming_card("Agent 正在思考...", "", "running")
-            run.card_message_id = await self._channel.send_card(
-                msg.chat_id, card, reply_to=msg.message_id,
-            )
-
-            accumulated_text = ""
-            last_update_time = 0.0
-
             async for chunk in client.stream(
-                msg.content,
+                context,
                 session_id=session_id,
                 cancel_event=run.cancel_event,
             ):
                 if isinstance(chunk, TextDeltaChunk):
-                    accumulated_text += chunk.content
-                    run.accumulated_text = accumulated_text
-                    now = asyncio.get_running_loop().time()
-                    if now - last_update_time > self._card_update_interval:
-                        await self._update_streaming_card(run, accumulated_text)
-                        last_update_time = now
+                    run.accumulated_text += chunk.content
 
                 elif isinstance(chunk, ToolCallChunk):
-                    tool_info = f"\n\n`🔧 调用工具: {chunk.tool_name}`\n"
-                    accumulated_text += tool_info
-                    run.accumulated_text = accumulated_text
                     await self._emit(EventType.AGENT_TOOL_CALL, {
                         "tool": chunk.tool_name,
                         "agent_id": agent_config.agent_id,
@@ -244,7 +253,8 @@ class AgentDispatcher:
                     if chunk.session_id:
                         self._sessions.set(session_key, chunk.session_id)
 
-            await self._update_streaming_card(run, accumulated_text or "(无输出)", "done")
+            # 完成：移除 🤔，打 ✅
+            await self._replace_reaction_safe(msg.message_id, reaction_id, "DONE")
             await self._emit(EventType.AGENT_RUN_END, {
                 "agent_id": agent_config.agent_id,
                 "user_id": msg.sender_id,
@@ -252,16 +262,18 @@ class AgentDispatcher:
 
         except Exception as e:
             logger.exception(f"Agent execution failed: {e}")
-            if run.card_message_id:
-                await self._update_streaming_card(run, f"执行出错: {str(e)}", "error")
-            else:
-                # 初始卡片发送失败，退回纯文本错误通知
-                try:
-                    await self._channel.send_text(
-                        run.chat_id, f"⚠️ 执行出错: {str(e)}", reply_to=msg.message_id
-                    )
-                except Exception:
-                    logger.warning("Failed to send fallback error text")
+            # 出错：移除 🤔，打 ❌
+            await self._replace_reaction_safe(msg.message_id, reaction_id, "CrossMark")
+            # 兜底发送错误通知
+            try:
+                error_card = build_streaming_card(
+                    _CARD_TITLE["error"], f"执行出错: {str(e)}", "error"
+                )
+                await self._channel.send_card(
+                    msg.chat_id, error_card, reply_to=msg.message_id
+                )
+            except Exception:
+                logger.warning("Failed to send error card")
             await self._emit(EventType.AGENT_RUN_ERROR, {
                 "agent_id": agent_config.agent_id,
                 "error": str(e),
@@ -277,51 +289,6 @@ class AgentDispatcher:
             run.cancel_event.set()
             return True
         return False
-
-    async def resolve_interaction(self, request_id: str, decision: str) -> bool:
-        """处理飞书卡片审批回调。
-        decision: "approve" | "reject" | "approve_all"
-        """
-        pending = self._pending_interactions.pop(request_id, None)
-        if pending is None:
-            logger.warning(f"No pending interaction for request_id={request_id}")
-            return False
-
-        self._user_pending.pop(pending.user_id, None)
-
-        actual_decision = decision
-        if decision == "approve_all":
-            # 标记该用户本次 session 后续所有 CONFIRM 操作自动批准
-            run = self._active_runs.get(pending.user_id)
-            if run:
-                run.auto_approve = True
-            actual_decision = "approve"
-
-        try:
-            await pending.client.submit_interaction(request_id, actual_decision)
-        except Exception as e:
-            logger.warning(f"submit_interaction failed: {e}")
-        finally:
-            if not pending.future.done():
-                pending.future.set_result(actual_decision)
-
-        await self._emit(EventType.AGENT_APPROVAL_RESOLVE, {
-            "request_id": request_id,
-            "decision": actual_decision,
-        })
-        return True
-
-    async def try_resolve_by_message(self, user_id: str, content: str) -> bool:
-        """用消息文本（允许/拒绝/全部允许）触发审批，返回是否消费了该消息。"""
-        request_id = self._user_pending.get(user_id)
-        if not request_id:
-            return False
-        decision_map = {"允许": "approve", "拒绝": "reject", "全部允许": "approve_all"}
-        decision = decision_map.get(content)
-        if not decision:
-            return False
-        await self.resolve_interaction(request_id, decision)
-        return True
 
     def get_agent(self, agent_id: str):
         """按 agent_id 查找 Agent 配置（委托给 Router）"""
@@ -362,57 +329,30 @@ class AgentDispatcher:
         chunk: InteractionRequestChunk,
         client: AsyncCodyClient,
     ) -> None:
-        """human-in-the-loop：发审批卡片 → 挂起协程 → 等回调唤醒 → 继续流。"""
-        if run.auto_approve:
-            # 用户已授权全部操作，直接批准无需打扰
-            await client.submit_interaction(chunk.request_id, "approve")
-            return
+        """Interaction 兜底：自动批准（interaction 已关闭，正常不会触发）。"""
+        await client.submit_interaction(chunk.request_id, "approve")
 
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
-        self._pending_interactions[chunk.request_id] = PendingInteraction(
-            future=future,
-            client=client,
-            user_id=run.user_id,
-        )
-        self._user_pending[run.user_id] = chunk.request_id
-
-        card = build_approval_card(
-            command=chunk.content,
-            agent_name=run.agent_id,
-        )
-        await self._channel.send_card(run.chat_id, card)
-
-        await self._emit(EventType.AGENT_APPROVAL_REQUEST, {
-            "request_id": chunk.request_id,
-            "agent_id": run.agent_id,
-        })
-
+    async def _add_reaction_safe(self, message_id: str, emoji_type: str) -> Optional[str]:
+        """给消息打表情，返回 reaction_id（失败返回 None）"""
         try:
-            # shield 防止外部 cancel 导致 future 被取消（submit_interaction 需要正常完成）
-            await asyncio.wait_for(asyncio.shield(future), timeout=_INTERACTION_TIMEOUT)
-        except asyncio.TimeoutError:
-            self._pending_interactions.pop(chunk.request_id, None)
-            self._user_pending.pop(run.user_id, None)
-            if not future.done():
-                future.cancel()
-            raise RuntimeError(f"审批超时（{int(_INTERACTION_TIMEOUT // 60)} 分钟），操作已取消")
-
-    async def _update_streaming_card(
-        self, run: ActiveRun, content: str, status: str = "running"
-    ) -> None:
-        """更新流式输出卡片"""
-        if not run.card_message_id:
-            return
-        card = build_streaming_card(
-            title=_CARD_TITLE.get(status, "执行完成"),
-            content=content,
-            status=status,
-        )
-        try:
-            await self._channel.update_card(run.card_message_id, card)
+            return await self._channel.add_reaction(message_id, emoji_type)
         except Exception as e:
-            logger.warning(f"Failed to update card: {e}")
+            logger.warning(f"Failed to add reaction {emoji_type}: {e}")
+            return None
+
+    async def _replace_reaction_safe(
+        self, message_id: str, old_reaction_id: Optional[str], new_emoji: str
+    ) -> None:
+        """移除旧表情，打上新表情"""
+        if old_reaction_id:
+            try:
+                await self._channel.remove_reaction(message_id, old_reaction_id)
+            except Exception as e:
+                logger.debug(f"Failed to remove reaction: {e}")
+        try:
+            await self._channel.add_reaction(message_id, new_emoji)
+        except Exception as e:
+            logger.debug(f"Failed to add reaction {new_emoji}: {e}")
 
     async def _emit(self, event_type: EventType, data: dict) -> None:
         """发射事件到 EventBus（若未配置则静默忽略）"""

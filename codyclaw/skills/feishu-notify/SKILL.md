@@ -1,27 +1,64 @@
+---
+name: feishu-notify
+description: Send messages, reply, and react in Feishu (Lark) chats.
+---
+
 # feishu-notify Skill
 
-## Description
+You are running inside CodyClaw, a Feishu bot gateway. You communicate with users through Feishu messages using the tools below. **You must use these tools to send your responses** — anything you output as plain text is NOT visible to the user.
 
-This skill enables the Cody Agent to send notifications to Feishu (Lark) chat sessions directly.
+## Context variables
 
-## Usage
+Every message you receive includes context at the top:
 
-Use this skill when you need to proactively send a message or notification to a Feishu user or group chat.
+- `chat_id`: The current conversation (use this for sending messages)
+- `message_id`: The user's message ID (use this for reply_to or reactions)
+- `chat_type`: "p2p" (direct message) or "group" (group chat)
+- `sender_name`: Who sent the message
+- `mentions`: Other users/bots mentioned in the message, with their `name` and `open_id`
 
-## Examples
+## @Mention syntax
 
-- "Send a message to the ops group saying the deployment is complete"
-- "Notify the user that the background task has finished"
-- "Post a summary of the analysis results to the chat"
+To @mention someone in Feishu text messages, use this exact format:
 
-## Parameters
+```
+<at user_id="open_id">Name</at>
+```
 
-- `chat_id` (required): The Feishu chat ID (user open_id for direct messages, or group chat_id for group chats)
-- `message` (required): The text content to send
-- `message_type` (optional): One of `"text"` or `"card"`. Defaults to `"text"`.
+Example: `<at user_id="ou_abc123">Alice</at> hello!`
 
-## Notes
+The `open_id` comes from the `mentions` field in the context. You MUST use the `<at>` tag — writing `@Name` as plain text will NOT create a real mention.
 
-- The skill uses the CodyClaw channel layer to send messages, so the bot must be a member of the target chat.
-- For group chats, ensure the bot has been added to the group before using this skill.
-- Card messages support Markdown formatting.
+## Tools
+
+### `feishu_send_text`
+Send a plain text message. Supports `<at>` tags for mentions.
+- `chat_id` (required): Target chat
+- `text` (required): Message content (supports `<at user_id="...">Name</at>` syntax)
+- `reply_to` (optional): message_id to quote-reply
+
+### `feishu_send_card`
+Send a rich card with Markdown body. Note: `<at>` tags work in card Markdown content too.
+- `chat_id` (required): Target chat
+- `title` (required): Card header
+- `content` (required): Markdown body
+- `color` (optional): blue, green, red, orange, turquoise, grey (default: blue)
+- `reply_to` (optional): message_id to quote-reply
+
+### `feishu_reply`
+Quick reply to a specific message.
+- `message_id` (required): The message to reply to
+- `text` (required): Reply content (supports `<at>` tags)
+
+### `feishu_add_reaction`
+Add an emoji reaction to a message.
+- `message_id` (required): The message to react to
+- `emoji_type` (required): THUMBSUP, DONE, SMILE, HEART, THANKS, OK, MUSCLE, CLAP, FIRE, PARTY, CrossMark, THINKING, etc.
+
+## Guidelines
+
+- For short answers, use `feishu_reply` or `feishu_send_text`
+- For structured/long answers, use `feishu_send_card` with Markdown
+- Use reactions to acknowledge messages quickly (e.g. THUMBSUP) or signal status (DONE, THINKING)
+- To @mention someone, you MUST use `<at user_id="open_id">Name</at>` — plain `@Name` does NOT work
+- Always respond via tools — your plain text output is invisible to Feishu users

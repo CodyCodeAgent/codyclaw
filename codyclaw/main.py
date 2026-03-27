@@ -96,6 +96,11 @@ async def lifespan(app: FastAPI):
     event_bus = EventBus()
     app.state.event_bus = event_bus
 
+    # 注册全局事件记录器，保证即使没有 SSE 客户端连接也能缓存历史事件
+    from codyclaw.web.api import _record_event
+    for _prefix in ("agent", "cron", "gateway", "message", "config"):
+        event_bus.on(_prefix, _record_event)
+
     dispatcher = AgentDispatcher(channel, router, config.cody, event_bus, config.db_path)
     app.state.dispatcher = dispatcher
 
@@ -104,12 +109,6 @@ async def lifespan(app: FastAPI):
 
     async def handle_message(msg):
         if dedup.is_duplicate(msg.message_id):
-            return
-        content = msg.content.strip()
-        if content == "取消":
-            await dispatcher.cancel(msg.sender_id)
-            return
-        if await dispatcher.try_resolve_by_message(msg.sender_id, content):
             return
         asyncio.create_task(dispatcher.dispatch(msg))
 

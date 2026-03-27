@@ -21,9 +21,17 @@ codyclaw
 ruff check codyclaw/
 # or: make lint
 
+# Auto-fix lint issues
+ruff check codyclaw/ --fix
+# or: make lint-fix
+
 # Run all tests
 pytest tests/ -v
 # or: make test
+
+# Run a single test file or function
+pytest tests/test_router.py -v
+pytest tests/test_router.py::test_default_agent_resolves_p2p -v
 
 # Lint + tests together
 make check
@@ -31,7 +39,7 @@ make check
 
 ## Architecture
 
-Five-layer design, all async (asyncio):
+Six-layer design, all async (asyncio):
 
 1. **Channel Layer** (`codyclaw/channel/`) — Feishu WebSocket adapter. Lark SDK runs in a separate thread, bridged to asyncio via `run_coroutine_threadsafe()`.
 
@@ -68,10 +76,11 @@ Five-layer design, all async (asyncio):
 - **Cody client setup**: Each agent gets its own `AsyncCodyClient` with skill_dir, custom tools, db_path, api_key, and base_url configured. Built lazily with double-checked locking (`asyncio.Lock`).
 - **Message deduplication**: LRU OrderedDict (1-hour window, 10K cap).
 - **Web chat**: SSE streaming via `POST /api/chat/send`. Auto-approves `InteractionRequestChunk` (web users are admins). Chat history persisted to `chat_messages` table.
+- **Lark SDK event loop workaround**: `lark_oapi.ws.client` captures the event loop into a module-level variable at import time. If imported inside uvicorn's async context, it grabs the running loop and causes `'event loop is already running'`. Fix in `lark_impl.py._run_ws_in_thread()`: create a new event loop in the thread and patch `ws_module.loop` before constructing `lark.ws.Client`.
 
 ## Code Style
 
 - Ruff rules: E, F, I (isort) with 100-char line length
 - Python 3.10+ (dataclasses, type hints, asyncio)
 - Use `Optional[str]` consistently (not `str | None`)
-- Tests use pytest-asyncio and monkeypatch for time-dependent tests
+- Tests use pytest-asyncio (`asyncio_mode = "auto"` — no `@pytest.mark.asyncio` decorator needed) and monkeypatch for time-dependent tests
