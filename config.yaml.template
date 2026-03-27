@@ -1,0 +1,65 @@
+# config.yaml
+
+# --- 飞书应用配置 ---
+lark:
+  app_id: "cli_xxx"
+  app_secret: "xxx"
+  encrypt_key: ""                      # 可选，事件加密
+  verification_token: ""               # 可选，事件验证
+  bot_open_id: "ou_xxx"                # 机器人自身的 open_id
+
+# --- Gateway 配置 ---
+gateway:
+  host: "0.0.0.0"
+  port: 8080
+  log_level: "info"
+
+# --- Agent 定义 ---
+agents:
+  - agent_id: "assistant"
+    name: "通用助手"
+    workdir: "/home/user/workspace"
+    model: "claude-sonnet-4-20250514"
+    trigger_mode: "all"                # 单聊直接响应
+    description: "通用编程助手，可以读写文件、执行命令"
+
+  - agent_id: "monitor"
+    name: "运维监控"
+    workdir: "/home/user/ops"
+    model: "claude-haiku-4-5-20251001"  # 轻量模型，降低成本
+    trigger_mode: "mention"            # 群聊需 @
+    allowed_groups: ["oc_xxx"]         # 限定运维群
+    description: "服务器监控和告警处理"
+
+default_agent: "assistant"
+
+# --- 定时任务 ---
+cron_tasks:
+  - task_id: "daily_news"
+    name: "每日技术新闻"
+    agent_id: "assistant"
+    prompt: "搜索今天的 AI 和前端技术新闻，整理成简报，不超过 500 字。"
+    schedule: "0 9 * * 1-5"            # 工作日 9:00
+    notify_chat_id: "oc_xxx"           # 推送到指定群
+
+  - task_id: "health_check"
+    name: "服务健康检查"
+    agent_id: "monitor"
+    prompt: "检查所有服务的运行状态，如果有异常立即报告。"
+    schedule: "every 30m"              # 每 30 分钟
+    notify_chat_id: "oc_xxx"
+
+# --- 全局 Cody 配置覆盖 ---
+cody:
+  model_api_key: "${ANTHROPIC_API_KEY}"  # 支持环境变量引用
+  enable_thinking: false
+  security:
+    command_timeout: 60
+    blocked_commands: ["rm -rf /", "mkfs", "dd if="]
+  permissions:
+    default_level: "confirm"
+    overrides:
+      read_file: "allow"
+      list_directory: "allow"
+      grep: "allow"
+      glob: "allow"
