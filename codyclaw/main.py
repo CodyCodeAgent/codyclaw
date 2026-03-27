@@ -155,8 +155,15 @@ def create_app(config: CodyClawConfig, config_path: str = "") -> FastAPI:
     app.state.setup_mode = False
 
     @app.get("/health")
-    async def health():
-        return {"status": "ok", "version": "0.1.0", "configured": True}
+    async def health(req: Request):
+        channel = getattr(req.app.state, "channel", None)
+        lark_connected = channel.is_connected if channel else False
+        return {
+            "status": "ok",
+            "version": "0.1.0",
+            "configured": True,
+            "lark_connected": lark_connected,
+        }
 
     @app.get("/api/agents")
     async def list_agents(req: Request):

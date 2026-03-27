@@ -91,6 +91,11 @@ class LarkChannelImpl(LarkChannel):
         self._ws_future = self._loop.run_in_executor(None, self._ws_client.start)
         self._ws_future.add_done_callback(self._on_ws_done)
 
+    @property
+    def is_connected(self) -> bool:
+        """WebSocket 是否处于连接状态。"""
+        return self._ws_future is not None and not self._ws_future.done()
+
     async def stop(self) -> None:
         """关闭渠道连接"""
         if self._ws_future is not None and not self._ws_future.done():

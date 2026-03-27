@@ -4,6 +4,8 @@
 
 import json
 import logging
+import os
+import sys
 import time
 import uuid
 from collections import deque
@@ -41,6 +43,49 @@ async def setup_status(req: Request):
         "configured": is_configured(config),
         "config_path": getattr(req.app.state, "config_path", ""),
     }
+
+
+@router.post("/setup/test-lark")
+async def setup_test_lark(req: Request):
+    """测试飞书凭证是否有效（通过获取 tenant_access_token 验证）。"""
+    import asyncio
+    import urllib.error
+    import urllib.request
+
+    body = await req.json()
+    app_id = body.get("app_id", "").strip()
+    app_secret = body.get("app_secret", "").strip()
+
+    if not app_id or not app_secret:
+        return JSONResponse(
+            {"ok": False, "error": "App ID and App Secret are required"},
+            status_code=400,
+        )
+
+    # 用飞书 API 获取 tenant_access_token 来验证凭证
+    def _test():
+        data = json.dumps({
+            "app_id": app_id,
+            "app_secret": app_secret,
+        }).encode()
+        r = urllib.request.Request(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            resp = urllib.request.urlopen(r, timeout=10)
+            result = json.loads(resp.read())
+            if result.get("code") == 0:
+                return {"ok": True, "message": "Feishu credentials verified!"}
+            return {"ok": False, "error": f"Feishu API error: {result.get('msg', 'unknown')}"}
+        except urllib.error.URLError as e:
+            return {"ok": False, "error": f"Connection failed: {e}"}
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, _test)
+    status = 200 if result["ok"] else 400
+    return JSONResponse(result, status_code=status)
 
 
 @router.post("/setup/save")
@@ -98,10 +143,21 @@ async def setup_save(req: Request):
     except Exception as e:
         return JSONResponse({"error": f"Failed to save config: {e}"}, status_code=500)
 
+    # 自动重启：延迟 1 秒后重启进程（让 HTTP 响应先返回）
+    import threading
+
+    def _restart():
+        time.sleep(1)
+        logger.info("Restarting CodyClaw after setup...")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    threading.Thread(target=_restart, daemon=True).start()
+
     return {
         "status": "ok",
-        "message": "Configuration saved! Please restart CodyClaw to apply.",
+        "message": "Configuration saved! CodyClaw is restarting...",
         "config_path": config_path,
+        "restarting": True,
     }
 
 # ---------------------------------------------------------------------------

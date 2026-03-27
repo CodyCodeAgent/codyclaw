@@ -35,6 +35,8 @@
             <label for="s-lark-bot-id">Bot Open ID</label>
             <input type="text" id="s-lark-bot-id" placeholder="ou_xxxx (for @mention detection)">
           </div>
+          <button type="button" class="btn btn-sm" id="test-lark-btn">Test Connection</button>
+          <span id="test-lark-result" class="test-result"></span>
         </div>
 
         <!-- Step 2: LLM -->
@@ -181,8 +183,33 @@
     <div id="page-config" class="page">
       <div class="page-header">
         <h1>Configuration</h1>
+        <button class="btn btn-primary btn-sm" id="config-save-btn" style="display:none">Save Changes</button>
+      </div>
+      <div id="config-edit-form" class="card" style="margin-bottom:16px">
+        <h3>Quick Edit</h3>
+        <div class="form-row" style="margin-top:12px">
+          <div class="form-group">
+            <label>Gateway Host</label>
+            <input type="text" id="cfg-host" class="cfg-input" data-path="gateway.host">
+          </div>
+          <div class="form-group">
+            <label>Gateway Port</label>
+            <input type="number" id="cfg-port" class="cfg-input" data-path="gateway.port">
+          </div>
+          <div class="form-group">
+            <label>Log Level</label>
+            <select id="cfg-log-level" class="select cfg-input" data-path="gateway.log_level">
+              <option value="debug">debug</option>
+              <option value="info">info</option>
+              <option value="warning">warning</option>
+              <option value="error">error</option>
+            </select>
+          </div>
+        </div>
+        <div id="config-edit-msg" style="font-size:12px;color:var(--text-secondary);margin-top:4px"></div>
       </div>
       <div class="card">
+        <h3>Full Configuration <span style="font-size:12px;color:var(--text-secondary);font-weight:400">(read-only)</span></h3>
         <div class="config-path" id="config-path"></div>
         <pre id="config-editor" class="config-code"></pre>
       </div>

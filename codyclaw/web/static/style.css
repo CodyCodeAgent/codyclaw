@@ -479,6 +479,12 @@ tr:hover td { background: #f9fafb; }
 .form-group input:focus { border-color: var(--primary); outline: none; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .required { color: var(--danger); }
+.test-result {
+  font-size: 13px;
+  margin-left: 8px;
+}
+.test-result.ok { color: var(--success); }
+.test-result.fail { color: var(--danger); }
 .setup-actions { margin-top: 24px; }
 .btn-lg { padding: 12px 32px; font-size: 15px; width: 100%; justify-content: center; }
 .setup-error {
@@ -489,6 +495,28 @@ tr:hover td { background: #f9fafb; }
   background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534;
   padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-bottom: 16px;
 }
+
+/* Chat welcome */
+.chat-welcome {
+  text-align: center;
+  padding: 60px 24px 24px;
+  color: var(--text-secondary);
+}
+.chat-welcome h3 { font-size: 18px; color: var(--text); margin-bottom: 8px; }
+.chat-welcome p { margin-bottom: 20px; font-size: 14px; }
+.chat-suggestions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.suggestion {
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--card-bg);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .15s;
+  font-family: var(--font);
+  color: var(--text);
+}
+.suggestion:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-light); }
 
 /* Empty state */
 .empty-state {

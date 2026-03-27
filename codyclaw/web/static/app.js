@@ -103,7 +103,27 @@ async function loadChat() {
       const hist = await fetchJSON(`${API}/chat/history?session_key=${encodeURIComponent(chatSessionKey)}`);
       renderChatHistory(hist.messages);
     }
+
+    // 空聊天时显示欢迎引导
+    const container = document.getElementById('chat-messages');
+    if (container.children.length === 0) {
+      container.innerHTML = `<div class="chat-welcome">
+        <h3>Start a conversation</h3>
+        <p>Try asking your agent something:</p>
+        <div class="chat-suggestions">
+          <button class="suggestion" onclick="useSuggestion(this)">Help me write a Python script</button>
+          <button class="suggestion" onclick="useSuggestion(this)">Explain the project structure</button>
+          <button class="suggestion" onclick="useSuggestion(this)">Create a cron task for daily reports</button>
+        </div>
+      </div>`;
+    }
   } catch (e) { console.error('Chat load error:', e); }
+}
+
+function useSuggestion(btn) {
+  document.getElementById('chat-input').value = btn.textContent;
+  document.getElementById('chat-messages').innerHTML = '';
+  document.getElementById('chat-input').focus();
 }
 
 function renderChatHistory(messages) {
@@ -326,10 +346,60 @@ async function loadConfig() {
   try {
     const data = await fetchJSON(`${API}/config`);
     document.getElementById('config-path').textContent = data.config_path;
-    const text = yaml_stringify(data.config);
-    document.getElementById('config-editor').textContent = text;
+    document.getElementById('config-editor').textContent = yaml_stringify(data.config);
+
+    // 填充 Quick Edit 表单
+    const gw = data.config.gateway || {};
+    document.getElementById('cfg-host').value = gw.host || '0.0.0.0';
+    document.getElementById('cfg-port').value = gw.port || 8080;
+    document.getElementById('cfg-log-level').value = gw.log_level || 'info';
+
+    // 监听变更
+    const saveBtn = document.getElementById('config-save-btn');
+    document.querySelectorAll('.cfg-input').forEach(el => {
+      el.addEventListener('change', () => { saveBtn.style.display = ''; });
+    });
   } catch (e) { console.error('Config load error:', e); }
 }
+
+document.getElementById('config-save-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('config-save-btn');
+  const msg = document.getElementById('config-edit-msg');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  msg.textContent = '';
+
+  const updates = {
+    gateway: {
+      host: document.getElementById('cfg-host').value,
+      port: parseInt(document.getElementById('cfg-port').value) || 8080,
+      log_level: document.getElementById('cfg-log-level').value,
+    },
+  };
+
+  try {
+    const res = await fetch(`${API}/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      msg.style.color = 'var(--success)';
+      msg.textContent = 'Saved! Restart to apply changes.';
+      btn.style.display = 'none';
+      loadConfig(); // 刷新只读视图
+    } else {
+      msg.style.color = 'var(--danger)';
+      msg.textContent = data.error || 'Save failed';
+    }
+  } catch (e) {
+    msg.style.color = 'var(--danger)';
+    msg.textContent = `Error: ${e.message}`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Save Changes';
+});
 
 // Simple YAML-like pretty printer for display
 function yaml_stringify(obj, indent = 0) {
@@ -407,10 +477,19 @@ document.getElementById('events-clear').addEventListener('click', () => {
 async function checkHealth() {
   try {
     const data = await fetchJSON('/health');
-    document.getElementById('health-status').textContent = `v${data.version} — Running`;
-    document.querySelector('.status-dot').classList.remove('error');
+    const dot = document.querySelector('.status-dot');
+    if (data.lark_connected) {
+      document.getElementById('health-status').textContent = 'Feishu Connected';
+      dot.className = 'status-dot';
+    } else if (data.configured) {
+      document.getElementById('health-status').textContent = 'Feishu Disconnected';
+      dot.className = 'status-dot error';
+    } else {
+      document.getElementById('health-status').textContent = 'Setup Required';
+      dot.className = 'status-dot error';
+    }
   } catch {
-    document.getElementById('health-status').textContent = 'Disconnected';
+    document.getElementById('health-status').textContent = 'Server Offline';
     document.querySelector('.status-dot').classList.add('error');
   }
 }
@@ -457,6 +536,34 @@ function hideSetup() {
   document.querySelector('.main').style.display = '';
 }
 
+// Test Lark connection
+document.getElementById('test-lark-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('test-lark-btn');
+  const result = document.getElementById('test-lark-result');
+  btn.disabled = true;
+  btn.textContent = 'Testing...';
+  result.textContent = '';
+  result.className = 'test-result';
+  try {
+    const res = await fetch(`${API}/setup/test-lark`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        app_id: document.getElementById('s-lark-app-id').value,
+        app_secret: document.getElementById('s-lark-app-secret').value,
+      }),
+    });
+    const data = await res.json();
+    result.textContent = data.ok ? data.message : data.error;
+    result.className = `test-result ${data.ok ? 'ok' : 'fail'}`;
+  } catch (e) {
+    result.textContent = `Network error: ${e.message}`;
+    result.className = 'test-result fail';
+  }
+  btn.disabled = false;
+  btn.textContent = 'Test Connection';
+});
+
 document.getElementById('setup-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const errEl = document.getElementById('setup-error');
@@ -488,10 +595,17 @@ document.getElementById('setup-form').addEventListener('submit', async (e) => {
     if (!res.ok) {
       errEl.textContent = data.error || 'Save failed';
       errEl.style.display = 'block';
-    } else {
-      successEl.innerHTML = `${data.message}<br><br><strong>Please restart CodyClaw to connect to Feishu.</strong><br><code>codyclaw</code> or <code>docker compose restart</code>`;
+      btn.disabled = false;
+      btn.textContent = 'Save & Start';
+    } else if (data.restarting) {
+      successEl.textContent = 'Configuration saved! Restarting...';
       successEl.style.display = 'block';
-      btn.textContent = 'Saved! Restart to apply';
+      btn.textContent = 'Restarting...';
+      // 轮询等待重启完成
+      waitForRestart();
+    } else {
+      successEl.textContent = data.message;
+      successEl.style.display = 'block';
     }
   } catch (err) {
     errEl.textContent = `Network error: ${err.message}`;
@@ -500,6 +614,30 @@ document.getElementById('setup-form').addEventListener('submit', async (e) => {
     btn.textContent = 'Save & Start';
   }
 });
+
+async function waitForRestart() {
+  const successEl = document.getElementById('setup-success');
+  let attempts = 0;
+  const maxAttempts = 30;
+  const check = async () => {
+    attempts++;
+    try {
+      const data = await fetchJSON('/health');
+      if (data.configured) {
+        // 重启成功，配置已生效
+        successEl.innerHTML = 'CodyClaw is ready! Redirecting...';
+        setTimeout(() => window.location.reload(), 500);
+        return;
+      }
+    } catch { /* server still restarting */ }
+    if (attempts < maxAttempts) {
+      setTimeout(check, 2000);
+    } else {
+      successEl.innerHTML = 'Restart is taking longer than expected. Please refresh the page manually.';
+    }
+  };
+  setTimeout(check, 3000); // 等待 3 秒后开始检查
+}
 
 // ---------------------------------------------------------------------------
 // Init
