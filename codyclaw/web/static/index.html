@@ -213,24 +213,49 @@
       </div>
       <div id="config-edit-form" class="card" style="margin-bottom:16px">
         <h3>Quick Edit</h3>
-        <div class="form-row" style="margin-top:12px">
+
+        <h4 style="font-size:13px;color:var(--text-secondary);margin:16px 0 8px">Feishu / Lark</h4>
+        <div class="form-row">
+          <div class="form-group">
+            <label>App ID</label>
+            <input type="text" id="cfg-lark-app-id" class="cfg-input" placeholder="cli_xxxx">
+          </div>
+          <div class="form-group">
+            <label>App Secret</label>
+            <input type="password" id="cfg-lark-app-secret" class="cfg-input" placeholder="(unchanged)">
+            <div class="field-hint">留空 = 不修改</div>
+          </div>
+          <div class="form-group">
+            <label>Bot Open ID</label>
+            <input type="text" id="cfg-lark-bot-id" class="cfg-input" placeholder="ou_xxxx">
+          </div>
+        </div>
+
+        <h4 style="font-size:13px;color:var(--text-secondary);margin:16px 0 8px">AI Model</h4>
+        <div class="form-row">
           <div class="form-group">
             <label>API Key</label>
             <input type="password" id="cfg-api-key" class="cfg-input" placeholder="(unchanged)">
-            <div class="field-hint">留空 = 不修改当前密钥</div>
+            <div class="field-hint">留空 = 不修改</div>
           </div>
           <div class="form-group">
             <label>Model</label>
             <input type="text" id="cfg-model" class="cfg-input" placeholder="e.g. claude-sonnet-4-20250514">
           </div>
+          <div class="form-group">
+            <label>Base URL</label>
+            <input type="text" id="cfg-base-url" class="cfg-input" placeholder="留空 = Anthropic 官方">
+          </div>
         </div>
+
+        <h4 style="font-size:13px;color:var(--text-secondary);margin:16px 0 8px">Gateway</h4>
         <div class="form-row">
           <div class="form-group">
-            <label>Gateway Host</label>
+            <label>Host</label>
             <input type="text" id="cfg-host" class="cfg-input">
           </div>
           <div class="form-group">
-            <label>Gateway Port</label>
+            <label>Port</label>
             <input type="number" id="cfg-port" class="cfg-input">
           </div>
           <div class="form-group">

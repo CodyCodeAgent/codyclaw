@@ -366,14 +366,22 @@ async function loadConfig() {
     document.getElementById('config-editor').textContent = yaml_stringify(data.config);
 
     // 填充 Quick Edit 表单
+    const lark = data.config.lark || {};
     const gw = data.config.gateway || {};
+    const cody = data.config.cody || {};
     const agents = data.config.agents || [];
+    // Lark
+    document.getElementById('cfg-lark-app-id').value = lark.app_id || '';
+    document.getElementById('cfg-lark-app-secret').value = '';
+    document.getElementById('cfg-lark-bot-id').value = lark.bot_open_id || '';
+    // Model
+    document.getElementById('cfg-model').value = agents.length > 0 ? (agents[0].model || '') : '';
+    document.getElementById('cfg-api-key').value = '';
+    document.getElementById('cfg-base-url').value = cody.base_url || '';
+    // Gateway
     document.getElementById('cfg-host').value = gw.host || '0.0.0.0';
     document.getElementById('cfg-port').value = gw.port || 8080;
     document.getElementById('cfg-log-level').value = gw.log_level || 'info';
-    document.getElementById('cfg-model').value = agents.length > 0 ? (agents[0].model || '') : '';
-    document.getElementById('cfg-api-key').value = '';
-    document.getElementById('cfg-api-key').placeholder = '(unchanged)';
 
     // 仅绑定一次监听器
     if (!configLoaded) {
@@ -393,34 +401,28 @@ document.getElementById('config-save-btn').addEventListener('click', async () =>
   btn.textContent = 'Saving...';
   msg.textContent = '';
 
-  const updates = {
-    gateway: {
-      host: document.getElementById('cfg-host').value,
-      port: parseInt(document.getElementById('cfg-port').value) || 8080,
-      log_level: document.getElementById('cfg-log-level').value,
-    },
+  // 收集所有字段
+  const quickPayload = {
+    // Lark
+    lark_app_id: document.getElementById('cfg-lark-app-id').value.trim(),
+    lark_app_secret: document.getElementById('cfg-lark-app-secret').value.trim(),
+    lark_bot_open_id: document.getElementById('cfg-lark-bot-id').value.trim(),
+    // Model
+    api_key: document.getElementById('cfg-api-key').value.trim(),
+    model: document.getElementById('cfg-model').value.trim(),
+    base_url: document.getElementById('cfg-base-url').value.trim(),
+    // Gateway
+    gateway_host: document.getElementById('cfg-host').value.trim(),
+    gateway_port: parseInt(document.getElementById('cfg-port').value) || 8080,
+    gateway_log_level: document.getElementById('cfg-log-level').value,
   };
 
-  // API Key 和 Model 通过 /api/config/quick 单独处理（允许敏感字段）
-  const apiKey = document.getElementById('cfg-api-key').value.trim();
-  const model = document.getElementById('cfg-model').value.trim();
-
   try {
-    // 保存 gateway 配置
-    const res = await fetch(`${API}/config`, {
+    const res = await fetch(`${API}/config/quick`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ updates }),
+      body: JSON.stringify(quickPayload),
     });
-
-    // 保存 API Key / Model（通过 quick edit 端点）
-    if (apiKey || model) {
-      await fetch(`${API}/config/quick`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: apiKey, model: model }),
-      });
-    }
 
     const data = await res.json();
     if (res.ok) {

@@ -298,32 +298,70 @@ async def update_config(req: Request):
 
 @router.put("/config/quick")
 async def quick_update_config(req: Request):
-    """快捷更新 API Key 和 Model（允许敏感字段）。"""
+    """快捷更新所有配置字段（包括敏感字段）。保存后需重启生效。"""
     config_path = getattr(req.app.state, "config_path", None)
     if not config_path or not Path(config_path).exists():
         return JSONResponse({"error": "Config file not found"}, status_code=404)
 
     body = await req.json()
-    api_key = body.get("api_key", "").strip()
-    model = body.get("model", "").strip()
-
-    if not api_key and not model:
-        return {"status": "ok", "message": "Nothing to update"}
 
     with open(config_path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
+    changed = False
+
+    # Lark 凭证
+    lark_app_id = body.get("lark_app_id", "").strip()
+    lark_app_secret = body.get("lark_app_secret", "").strip()
+    lark_bot_id = body.get("lark_bot_open_id", "").strip()
+    if lark_app_id:
+        raw.setdefault("lark", {})["app_id"] = lark_app_id
+        changed = True
+    if lark_app_secret:
+        raw.setdefault("lark", {})["app_secret"] = lark_app_secret
+        changed = True
+    if lark_bot_id is not None:
+        raw.setdefault("lark", {})["bot_open_id"] = lark_bot_id
+        changed = True
+
+    # API Key / Base URL
+    api_key = body.get("api_key", "").strip()
+    base_url = body.get("base_url", "")
     if api_key:
         raw.setdefault("cody", {})["model_api_key"] = api_key
+        changed = True
+    if base_url is not None:
+        raw.setdefault("cody", {})["base_url"] = base_url.strip()
+        changed = True
 
+    # Model
+    model = body.get("model", "").strip()
     if model and raw.get("agents"):
         for agent in raw["agents"]:
             agent["model"] = model
+        changed = True
+
+    # Gateway
+    gw_host = body.get("gateway_host", "").strip()
+    gw_port = body.get("gateway_port")
+    gw_log = body.get("gateway_log_level", "").strip()
+    if gw_host:
+        raw.setdefault("gateway", {})["host"] = gw_host
+        changed = True
+    if gw_port:
+        raw.setdefault("gateway", {})["port"] = int(gw_port)
+        changed = True
+    if gw_log:
+        raw.setdefault("gateway", {})["log_level"] = gw_log
+        changed = True
+
+    if not changed:
+        return {"status": "ok", "message": "Nothing to update"}
 
     with open(config_path, "w", encoding="utf-8") as f:
         yaml.dump(raw, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
-    return {"status": "ok", "message": "Updated. Restart to apply."}
+    return {"status": "ok", "message": "Saved! Restart to apply changes."}
 
 
 # ---------------------------------------------------------------------------
