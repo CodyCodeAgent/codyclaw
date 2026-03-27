@@ -22,6 +22,7 @@ class AgentConfig:
     trigger_mode: str = "mention"          # "mention" | "all" | "prefix"
     prefix: str = "/"                      # prefix 模式下的触发前缀
     boot_file: Optional[str] = None        # BOOT.md 路径
+    system_prompt: str = ""                # Agent 专属系统提示词（追加到通用提示词之后）
 
 
 class MessageRouter:

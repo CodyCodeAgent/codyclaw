@@ -45,6 +45,6 @@ Parameters:
 
 ## Notes
 
-- Tasks created here are in-memory and will be lost if the gateway restarts.
+- Tasks created here are **persisted to database** and survive gateway restarts.
 - The `schedule` field supports standard 5-field cron expressions or simple intervals: `"every Xm"`, `"every Xh"`, `"Xm"`, `"Xh"`.
 - Always confirm the schedule and notify chat with the user before creating.

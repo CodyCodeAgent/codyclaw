@@ -1,7 +1,6 @@
 # codyclaw/automation/cron.py
 
 import logging
-import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -86,10 +85,10 @@ class CronScheduler:
 
             client = await self._dispatcher.get_or_create_client(agent_config)
 
-            # 用临时 session 执行，不污染用户会话
+            # 复用同一 session，让 AI 记住上次执行的结果和上下文
             result = await client.run(
                 task.prompt,
-                session_id=f"cron-{task.task_id}-{uuid.uuid4().hex[:8]}",
+                session_id=f"cron-{task.task_id}",
             )
 
             # 推送结果到飞书

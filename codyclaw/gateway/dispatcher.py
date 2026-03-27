@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from cody import AsyncCodyClient, Cody
+from cody.core.memory import ProjectMemoryStore
 from cody.sdk.types import DoneChunk, InteractionRequestChunk, TextDeltaChunk, ToolCallChunk
 
 from codyclaw.automation.events import Event, EventBus, EventType
@@ -126,6 +127,10 @@ class AgentDispatcher:
         async with self._client_locks[agent_id]:
             if agent_id not in self._clients:
                 cb = self._cody_config.get("circuit_breaker", {})
+                # 拼接系统提示词：通用 + Agent 专属
+                system_prompt = _FEISHU_SYSTEM_PROMPT
+                if agent_config.system_prompt:
+                    system_prompt += f"\n\n## Agent 专属指令\n\n{agent_config.system_prompt}"
                 builder = (
                     Cody()
                     .workdir(agent_config.workdir)
@@ -137,7 +142,14 @@ class AgentDispatcher:
                         loop_detect_turns=cb.get("loop_detect_turns", 6),
                     )
                     .skill_dir(_SKILLS_DIR)
-                    .extra_system_prompt(_FEISHU_SYSTEM_PROMPT)
+                    .extra_system_prompt(system_prompt)
+                )
+                # 启用持久化记忆——AI 可以跨会话记住用户偏好和项目知识
+                memory_dir = Path(self._db_path).parent if self._db_path else None
+                builder = builder.memory_store(
+                    ProjectMemoryStore.from_workdir(
+                        Path(agent_config.workdir), base_dir=memory_dir
+                    )
                 )
                 if self._db_path:
                     cody_db = str(
