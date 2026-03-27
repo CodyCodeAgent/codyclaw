@@ -60,7 +60,13 @@ async function loadDashboard() {
         alertEl.innerHTML = '<strong>Feishu Connected</strong> — The bot is online and ready to receive messages. Try sending a message to the bot in Feishu!';
       } else {
         alertEl.className = 'dashboard-alert alert-warning';
-        alertEl.innerHTML = '<strong>Feishu Disconnected</strong> — Please check your Lark App ID and App Secret in the <a href="#" onclick="navigateTo(\'config\')">Config</a> page.';
+        let msg = '<strong>Feishu Disconnected</strong>';
+        if (health.lark_error) {
+          msg += ` — Error: <code>${esc(health.lark_error)}</code>`;
+        } else {
+          msg += ' — Please check your Lark App ID and App Secret in the <a href="#" onclick="navigateTo(\'config\')">Config</a> page.';
+        }
+        alertEl.innerHTML = msg;
       }
       alertEl.style.display = 'block';
     } catch { alertEl.style.display = 'none'; }

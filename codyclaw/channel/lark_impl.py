@@ -38,6 +38,7 @@ class LarkChannelImpl(LarkChannel):
         self._handlers: list[MessageHandler] = []
         self._ws_client = None
         self._ws_future = None  # executor future，用于错误监控和 stop()
+        self._last_error: Optional[str] = None  # 最后一次连接错误
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._user_name_cache: OrderedDict[str, str] = OrderedDict()  # open_id → name（LRU）
 
@@ -68,13 +69,15 @@ class LarkChannelImpl(LarkChannel):
     def _on_ws_done(self, future) -> None:
         """WebSocket 线程结束回调，记录异常。"""
         if future.cancelled():
-            # stop() 主动取消时的正常路径，不视为错误
             logger.info("WebSocket connection cancelled (normal shutdown)")
+            self._last_error = None
             return
         exc = future.exception()
         if exc is not None:
+            self._last_error = str(exc)
             logger.error(f"WebSocket connection terminated with error: {exc}")
         else:
+            self._last_error = None
             logger.info("WebSocket connection closed")
 
     async def start(self) -> None:
