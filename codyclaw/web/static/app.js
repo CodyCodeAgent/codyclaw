@@ -206,6 +206,9 @@ async function sendChatMessage() {
           } else if (event.type === 'tool') {
             accumulated += `\n[Tool: ${event.name}]\n`;
             updateStreamingMessage(accumulated);
+          } else if (event.type === 'approval') {
+            accumulated += `\n[Auto-approved: ${event.content}]\n`;
+            updateStreamingMessage(accumulated);
           } else if (event.type === 'done') {
             chatSessionKey = event.session_key || chatSessionKey;
           } else if (event.type === 'error') {

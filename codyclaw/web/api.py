@@ -6,12 +6,13 @@ import json
 import logging
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
 from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from codyclaw.automation.events import Event
 
@@ -28,8 +29,8 @@ router = APIRouter(prefix="/api")
 # Chat history (in-memory ring buffer, persisted to DB on write)
 # ---------------------------------------------------------------------------
 
-_chat_history: list[dict] = []  # 最近的聊天记录
 _MAX_HISTORY = 500
+_chat_history: deque[dict] = deque(maxlen=_MAX_HISTORY)
 
 
 def _add_chat_message(
@@ -49,8 +50,6 @@ def _add_chat_message(
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     _chat_history.append(msg)
-    if len(_chat_history) > _MAX_HISTORY:
-        _chat_history.pop(0)
 
     if db_path:
         try:
@@ -130,12 +129,12 @@ async def update_config(req: Request):
     """更新配置文件（仅修改非敏感字段）。"""
     config_path = getattr(req.app.state, "config_path", None)
     if not config_path or not Path(config_path).exists():
-        return {"error": "Config file not found"}, 404
+        return JSONResponse({"error": "Config file not found"}, status_code=404)
 
     body = await req.json()
     updates = body.get("updates", {})
     if not updates:
-        return {"error": "No updates provided"}
+        return JSONResponse({"error": "No updates provided"}, status_code=400)
 
     with open(config_path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
@@ -155,7 +154,11 @@ async def update_config(req: Request):
     with open(config_path, "w", encoding="utf-8") as f:
         yaml.dump(raw, f, allow_unicode=True, default_flow_style=False)
 
-    return {"status": "ok", "message": "Config updated. Restart to apply changes."}
+    return {
+        "status": "ok",
+        "message": "Config updated. Restart to apply changes.",
+        "warning": "YAML comments in the original file have been removed by this operation.",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +168,12 @@ async def update_config(req: Request):
 @router.post("/chat/send")
 async def chat_send(req: Request):
     """通过 SSE 向 Agent 发送消息并流式返回结果。"""
-    from cody.sdk.types import DoneChunk, TextDeltaChunk, ToolCallChunk
+    from cody.sdk.types import (
+        DoneChunk,
+        InteractionRequestChunk,
+        TextDeltaChunk,
+        ToolCallChunk,
+    )
 
     body = await req.json()
     agent_id = body.get("agent_id", "")
@@ -173,7 +181,7 @@ async def chat_send(req: Request):
     session_key = body.get("session_key", "")
 
     if not message:
-        return {"error": "message is required"}
+        return JSONResponse({"error": "message is required"}, status_code=400)
 
     dispatcher: "AgentDispatcher" = req.app.state.dispatcher
     config = req.app.state.config
@@ -186,7 +194,7 @@ async def chat_send(req: Request):
         if default_id:
             agent_config = dispatcher.get_agent(default_id)
     if not agent_config:
-        return {"error": f"Agent '{agent_id}' not found"}
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
 
     if not session_key:
         session_key = f"web:{agent_config.agent_id}:{uuid.uuid4().hex[:8]}"
@@ -195,8 +203,7 @@ async def chat_send(req: Request):
     _add_chat_message(agent_config.agent_id, session_key, "user", message, db_path)
 
     client = await dispatcher.get_or_create_client(agent_config)
-    sessions = dispatcher._sessions
-    session_id = sessions.get(session_key)
+    session_id = dispatcher.get_session(session_key)
 
     async def event_stream():
         accumulated = ""
@@ -210,10 +217,15 @@ async def chat_send(req: Request):
                     tool_info = f"\n`[Tool: {chunk.tool_name}]`\n"
                     accumulated += tool_info
                     yield f"data: {json.dumps({'type': 'tool', 'name': chunk.tool_name})}\n\n"
+                elif isinstance(chunk, InteractionRequestChunk):
+                    # Web 控制台自动批准操作（Web 用户视为管理员）
+                    await client.submit_interaction(chunk.request_id, "approve")
+                    yield f"data: {json.dumps({'type': 'approval', 'content': chunk.content})}\n\n"
+
                 elif isinstance(chunk, DoneChunk):
                     if chunk.session_id:
                         new_session_id = chunk.session_id
-                        sessions.set(session_key, chunk.session_id)
+                        dispatcher.set_session(session_key, chunk.session_id)
 
             # 保存助手回复
             if accumulated:
@@ -318,7 +330,7 @@ async def dashboard(req: Request):
 
     agents = list(router_inst.iter_agents())
     active_sessions = dispatcher.get_sessions()
-    active_runs = len(dispatcher._active_runs)
+    active_runs = dispatcher.active_run_count
 
     cron_tasks = []
     for task in cron.tasks.values():

@@ -148,12 +148,15 @@ def create_app(config: CodyClawConfig, config_path: str = "") -> FastAPI:
         tasks = []
         for task in cron.tasks.values():
             job = cron.get_job(task.task_id)
+            next_run = None
+            if job and job.next_run_time:
+                next_run = job.next_run_time.strftime("%Y-%m-%d %H:%M")
             tasks.append({
                 "id": task.task_id,
                 "name": task.name,
                 "schedule": task.schedule,
                 "enabled": task.enabled,
-                "next_run": str(job.next_run_time) if job else None,
+                "next_run": next_run,
             })
         return {"tasks": tasks}
 

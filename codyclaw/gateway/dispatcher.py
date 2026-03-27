@@ -331,6 +331,19 @@ class AgentDispatcher:
         """供管理 API 使用"""
         return self._sessions.all()
 
+    def get_session(self, key: str) -> str | None:
+        """获取指定 key 的 session_id"""
+        return self._sessions.get(key)
+
+    def set_session(self, key: str, session_id: str) -> None:
+        """设置 session_id（供 Web Chat 使用）"""
+        self._sessions.set(key, session_id)
+
+    @property
+    def active_run_count(self) -> int:
+        """当前活跃的 Agent 执行数量"""
+        return len(self._active_runs)
+
     async def shutdown(self) -> None:
         """取消所有活跃任务，然后关闭所有 Client"""
         for run in list(self._active_runs.values()):
