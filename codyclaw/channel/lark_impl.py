@@ -70,14 +70,16 @@ class LarkChannelImpl(LarkChannel):
     def _run_ws_in_thread(self) -> None:
         """在独立线程中运行 lark WebSocket。
 
-        lark SDK 在 Client() 构造时就捕获当前线程的 event loop。
-        所以必须在线程内部创建 Client 和调用 start()，确保 SDK
-        拿到的是线程自己的 loop，而不是主线程的 uvicorn loop。
+        lark SDK 内部存在嵌套的 asyncio event loop 调用
+        （run_until_complete 中再调 run_until_complete），
+        需要 nest_asyncio 补丁才能正常工作。
         """
+        import nest_asyncio
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        nest_asyncio.apply(loop)
         try:
-            # 必须在此线程内构造 Client（SDK 构造时绑定 event loop）
             self._ws_client = lark.ws.Client(
                 self.config.app_id,
                 self.config.app_secret,
