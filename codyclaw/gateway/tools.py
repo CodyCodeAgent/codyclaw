@@ -267,13 +267,18 @@ def make_skill_tools(on_skill_changed):
         if not name or not re.match(r'^[a-z0-9][a-z0-9-]*$', name):
             return "Error: invalid skill name. Use lowercase letters, digits, and hyphens."
 
+        # 确保 description 是干净的单行文本（防止 YAML 注入）
+        description = description.replace("\n", " ").replace("\r", " ").strip()
+        description = description.replace('"', '\\"')  # 转义双引号
+
         skill_dir = _managed_skills_dir() / name
         skill_dir.mkdir(parents=True, exist_ok=True)
 
+        # 用引号包裹 description，防止冒号等 YAML 特殊字符
         frontmatter = (
             f"---\n"
             f"name: {name}\n"
-            f"description: {description}\n"
+            f'description: "{description}"\n'
             f"---\n\n"
         )
         skill_path = skill_dir / "SKILL.md"
@@ -322,7 +327,17 @@ def make_skill_tools(on_skill_changed):
         Args:
             name: The skill name to remove.
         """
+        # 校验名称，防止路径穿越
+        if not re.match(r'^[a-z0-9][a-z0-9-]*$', name):
+            return "Error: invalid skill name."
+
         skill_dir = _managed_skills_dir() / name
+        # 确保解析后的路径仍在 managed 目录内
+        try:
+            skill_dir.resolve().relative_to(_managed_skills_dir().resolve())
+        except ValueError:
+            return "Error: invalid skill path."
+
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.exists():
             return f"Skill '{name}' not found in installed skills."
