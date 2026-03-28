@@ -122,14 +122,24 @@ class AgentDispatcher:
         self._cron_scheduler = scheduler
 
     async def _on_skill_changed(self) -> None:
-        """Skill 安装/删除后调用：关闭所有缓存的 client，下条消息时自动重建。"""
-        for client in self._clients.values():
+        """Skill 安装/删除后调用：清除空闲的缓存 client，下条消息时自动重建。
+
+        正在执行中的 client 不会被关闭（dispatch 持有引用），
+        仅从缓存移除，执行结束后自然释放。
+        """
+        active_agent_ids = {r.agent_id for r in self._active_runs.values()}
+        to_close = {
+            aid: client for aid, client in self._clients.items()
+            if aid not in active_agent_ids
+        }
+        for aid, client in to_close.items():
             try:
                 await client.__aexit__(None, None, None)
             except Exception:
                 pass
+        # 从缓存中移除所有 client（包括在用的），下次 get_or_create_client 会重建
         self._clients.clear()
-        logger.info("All agent clients invalidated due to skill change")
+        logger.info("Agent clients invalidated due to skill change")
 
     async def get_or_create_client(self, agent_config: "AgentConfig") -> AsyncCodyClient:
         """获取或创建 Agent 对应的 Cody Client（double-checked locking，防并发竞态）"""
@@ -296,8 +306,10 @@ class AgentDispatcher:
                     await self._update_streaming_card(run, msg)
 
                 elif isinstance(chunk, ToolCallChunk):
-                    # 跟踪是否调了飞书发消息工具
-                    if chunk.tool_name and chunk.tool_name.startswith("feishu_send"):
+                    # 跟踪是否调了飞书发消息工具（send_text/send_card/reply 都算）
+                    if chunk.tool_name and chunk.tool_name.startswith(
+                        ("feishu_send", "feishu_reply")
+                    ):
                         run.has_sent_feishu_message = True
                     run.tool_calls.append(chunk.tool_name or "unknown")
                     await self._emit(EventType.AGENT_TOOL_CALL, {

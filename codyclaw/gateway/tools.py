@@ -7,6 +7,7 @@
 import json
 import logging
 import re
+import shutil
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -262,8 +263,9 @@ def make_skill_tools(on_skill_changed):
                      the YAML frontmatter — it is generated automatically.
         """
         name = re.sub(r'[^a-z0-9\-]', '-', name.lower().strip())
-        if not name:
-            return "Error: skill name is required."
+        name = re.sub(r'-{2,}', '-', name).strip('-')  # 合并连续连字符，去首尾
+        if not name or not re.match(r'^[a-z0-9][a-z0-9-]*$', name):
+            return "Error: invalid skill name. Use lowercase letters, digits, and hyphens."
 
         skill_dir = _managed_skills_dir() / name
         skill_dir.mkdir(parents=True, exist_ok=True)
@@ -293,6 +295,8 @@ def make_skill_tools(on_skill_changed):
             if not d.exists():
                 continue
             for skill_dir in sorted(d.iterdir()):
+                if not skill_dir.is_dir():
+                    continue
                 skill_md = skill_dir / "SKILL.md"
                 if skill_md.exists():
                     source = "built-in" if d == builtin_dir else "installed"
@@ -323,8 +327,6 @@ def make_skill_tools(on_skill_changed):
         if not skill_md.exists():
             return f"Skill '{name}' not found in installed skills."
 
-        # 删除整个 skill 目录
-        import shutil
         shutil.rmtree(skill_dir)
 
         await on_skill_changed()
