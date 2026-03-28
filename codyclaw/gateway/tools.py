@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -226,3 +227,107 @@ def make_cron_tools(get_scheduler):
         return f"Task '{task_id}' not found."
 
     return [create_cron_task, list_cron_tasks, delete_cron_task]
+
+
+def _managed_skills_dir() -> Path:
+    """返回用户可写的 managed skill 目录（~/.codyclaw/skills/）。"""
+    d = Path.home() / ".codyclaw" / "skills"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def make_skill_tools(on_skill_changed):
+    """Return tools for AI to create/list/remove skills.
+
+    `on_skill_changed` is an async callback invoked after install/remove
+    so the dispatcher can invalidate cached clients.
+    """
+
+    async def install_skill(
+        ctx,
+        name: str,
+        description: str,
+        content: str,
+    ) -> str:
+        """Create and install a new skill. The skill becomes active on the next message.
+
+        A skill teaches the AI new capabilities or behavioral patterns via
+        a SKILL.md instruction file. Use this to extend your own abilities.
+
+        Args:
+            name: Skill name, lowercase with hyphens (e.g. "code-reviewer").
+            description: One-line description of what the skill does.
+            content: The full Markdown body of the SKILL.md (instructions,
+                     tool descriptions, examples, guidelines). Do NOT include
+                     the YAML frontmatter — it is generated automatically.
+        """
+        name = re.sub(r'[^a-z0-9\-]', '-', name.lower().strip())
+        if not name:
+            return "Error: skill name is required."
+
+        skill_dir = _managed_skills_dir() / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+
+        frontmatter = (
+            f"---\n"
+            f"name: {name}\n"
+            f"description: {description}\n"
+            f"---\n\n"
+        )
+        skill_path = skill_dir / "SKILL.md"
+        skill_path.write_text(frontmatter + content, encoding="utf-8")
+
+        await on_skill_changed()
+        return (
+            f"Skill '{name}' installed at {skill_path}. "
+            f"It will be active on the next message."
+        )
+
+    async def list_skills(ctx) -> str:
+        """List all installed skills (both built-in and user-installed)."""
+        builtin_dir = Path(__file__).parent.parent / "skills"
+        managed_dir = _managed_skills_dir()
+
+        skills = []
+        for d in [builtin_dir, managed_dir]:
+            if not d.exists():
+                continue
+            for skill_dir in sorted(d.iterdir()):
+                skill_md = skill_dir / "SKILL.md"
+                if skill_md.exists():
+                    source = "built-in" if d == builtin_dir else "installed"
+                    # 读取 description from frontmatter
+                    desc = ""
+                    for line in skill_md.read_text(encoding="utf-8").splitlines():
+                        if line.startswith("description:"):
+                            desc = line.split(":", 1)[1].strip()
+                            break
+                    skills.append({
+                        "name": skill_dir.name,
+                        "source": source,
+                        "description": desc,
+                    })
+
+        if not skills:
+            return "No skills installed."
+        return json.dumps(skills, ensure_ascii=False, indent=2)
+
+    async def remove_skill(ctx, name: str) -> str:
+        """Remove a user-installed skill. Built-in skills cannot be removed.
+
+        Args:
+            name: The skill name to remove.
+        """
+        skill_dir = _managed_skills_dir() / name
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            return f"Skill '{name}' not found in installed skills."
+
+        # 删除整个 skill 目录
+        import shutil
+        shutil.rmtree(skill_dir)
+
+        await on_skill_changed()
+        return f"Skill '{name}' removed. Change takes effect on the next message."
+
+    return [install_skill, list_skills, remove_skill]

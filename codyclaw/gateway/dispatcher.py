@@ -14,14 +14,15 @@ from cody.sdk.types import DoneChunk, InteractionRequestChunk, TextDeltaChunk, T
 from codyclaw.automation.events import Event, EventBus, EventType
 from codyclaw.channel.cards import build_streaming_card
 from codyclaw.gateway.session_strategy import SessionManager
-from codyclaw.gateway.tools import make_cron_tools, make_feishu_tools
+from codyclaw.gateway.tools import make_cron_tools, make_feishu_tools, make_skill_tools
 
 if TYPE_CHECKING:
     from codyclaw.automation.cron import CronScheduler
     from codyclaw.channel.base import IncomingMessage, LarkChannel
     from codyclaw.gateway.router import AgentConfig, MessageRouter
 
-_SKILLS_DIR = str(Path(__file__).parent.parent / "skills")
+_BUILTIN_SKILLS_DIR = str(Path(__file__).parent.parent / "skills")
+_MANAGED_SKILLS_DIR = str(Path.home() / ".codyclaw" / "skills")
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,7 @@ class AgentDispatcher:
         self._cron_scheduler: Optional["CronScheduler"] = None
         self._cron_tools = make_cron_tools(lambda: self._cron_scheduler)
         self._feishu_tools = make_feishu_tools(lambda: self._channel)
+        self._skill_tools = make_skill_tools(self._on_skill_changed)
 
     # -------------------------------------------------------------------------
     # Client 管理
@@ -118,6 +120,16 @@ class AgentDispatcher:
 
     def set_cron_scheduler(self, scheduler: "CronScheduler") -> None:
         self._cron_scheduler = scheduler
+
+    async def _on_skill_changed(self) -> None:
+        """Skill 安装/删除后调用：关闭所有缓存的 client，下条消息时自动重建。"""
+        for client in self._clients.values():
+            try:
+                await client.__aexit__(None, None, None)
+            except Exception:
+                pass
+        self._clients.clear()
+        logger.info("All agent clients invalidated due to skill change")
 
     async def get_or_create_client(self, agent_config: "AgentConfig") -> AsyncCodyClient:
         """获取或创建 Agent 对应的 Cody Client（double-checked locking，防并发竞态）"""
@@ -141,7 +153,7 @@ class AgentDispatcher:
                         max_cost_usd=cb.get("max_cost_usd", 2.0),
                         loop_detect_turns=cb.get("loop_detect_turns", 6),
                     )
-                    .skill_dir(_SKILLS_DIR)
+                    .skill_dirs([_BUILTIN_SKILLS_DIR, _MANAGED_SKILLS_DIR])
                     .extra_system_prompt(system_prompt)
                 )
                 # 启用持久化记忆——AI 可以跨会话记住用户偏好和项目知识
@@ -159,6 +171,8 @@ class AgentDispatcher:
                 for tool in self._cron_tools:
                     builder = builder.tool(tool)
                 for tool in self._feishu_tools:
+                    builder = builder.tool(tool)
+                for tool in self._skill_tools:
                     builder = builder.tool(tool)
                 builder = self._apply_cody_config(builder, self._cody_config)
                 # 每个 Agent 的 api_key/base_url 优先级高于全局 cody 配置
