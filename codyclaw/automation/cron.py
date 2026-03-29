@@ -118,7 +118,9 @@ class CronScheduler:
                     )
                     await self._channel.send_card(task.notify_chat_id, card)
                 except Exception as notify_err:
-                    logger.warning(f"Cron task {task.name}: failed to send Feishu notification: {notify_err}")
+                    logger.warning(
+                        f"Cron task {task.name}: failed to send Feishu notification: {notify_err}"
+                    )
 
         except Exception as e:
             logger.exception(f"Cron task {task.name} failed: {e}")
@@ -132,7 +134,9 @@ class CronScheduler:
                         f"⚠️ 定时任务 [{task.name}] 执行失败: {str(e)}",
                     )
                 except Exception as notify_err:
-                    logger.warning(f"Cron task {task.name}: failed to send error notification: {notify_err}")
+                    logger.warning(
+                        f"Cron task {task.name}: failed to send error notification: {notify_err}"
+                    )
 
     def update_task(self, task_id: str, **kwargs) -> bool:
         """Update fields of an existing task and reschedule it. Returns False if not found.
