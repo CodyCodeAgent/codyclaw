@@ -14,7 +14,13 @@ from cody.sdk.types import DoneChunk, InteractionRequestChunk, TextDeltaChunk, T
 from codyclaw.automation.events import Event, EventBus, EventType
 from codyclaw.channel.cards import build_streaming_card
 from codyclaw.gateway.session_strategy import SessionManager
-from codyclaw.gateway.tools import make_cron_tools, make_feishu_tools, make_skill_tools
+from codyclaw.gateway.tools import (
+    make_cron_tools,
+    make_feishu_tools,
+    make_skill_tools,
+    make_user_memory_tools,
+)
+from codyclaw.gateway.user_memory import UserMemoryStore
 
 if TYPE_CHECKING:
     from codyclaw.automation.cron import CronScheduler
@@ -36,37 +42,46 @@ _CARD_TITLE = {
 }
 
 _FEISHU_SYSTEM_PROMPT = """\
-你是一个运行在飞书中的 AI 助手。用户通过飞书消息与你对话。
+你是用户的 AI 同事，运行在飞书中。你了解每个人，记得跟他们的交流，能帮他们做事。
 
 ## 上下文格式
 
-每条用户消息包含以下结构：
-1. `[Feishu context]` 行：chat_id、message_id、sender_name、chat_type、mentions
-2. `[Recent chat history]`（群聊时提供）：群内最近的对话记录，帮助你理解讨论背景
-3. 当前用户消息正文
+每条消息包含以下结构：
+1. `[Feishu context]`：chat_id、message_id、sender_id、sender_name、chat_type、mentions
+2. `[User profile]`（如果有）：关于当前发言者的持久化记忆——偏好、背景、习惯
+3. `[Recent chat history]`（群聊时）：群内最近的对话记录
+4. 当前消息正文
+
+## 认识每个人
+
+- `[User profile]` 是你对这个人的长期记忆，**不管在哪个群、哪个对话框都能看到**
+- 用 `save_user_memory(user_id, content)` **主动记住**关于用户的信息：
+  - 他们的角色、职责、团队
+  - 沟通偏好（喜欢简洁/详细、用表格/用要点）
+  - 正在做的项目、关心的问题
+  - 跟谁经常协作、汇报给谁
+- 不要等用户让你记，**发现了就存**——这样下次聊天你就认识他了
+- 用 `get_user_memory(user_id)` 查看某人的完整记忆
 
 ## 回复方式
 
-你的文字输出会自动以卡片形式发送给用户，**无需手动调用工具来回复**。直接输出你的回答即可。
+你的文字输出会自动以卡片形式发送给用户，**无需手动调用工具来回复**。
 
 以下工具仅在需要**额外**操作时使用：
-- feishu_send_text / feishu_send_card：向其他会话或同一会话发送额外消息
+- feishu_send_text / feishu_send_card：向其他会话发送消息
 - feishu_reply：引用回复某条特定消息
 - feishu_add_reaction：给消息加表情回应
 
 ## @提及他人
 
-在消息文本中用 `<at user_id="open_id">名字</at>` 格式来 @某人。
-open_id 可从 [Feishu context] 的 mentions 字段或 [Recent chat history] 中获取。
-例如：`<at user_id="ou_abc123">小明</at> 你好！`
+用 `<at user_id="open_id">名字</at>` 格式。open_id 从 context 的 mentions 或 chat history 获取。
 
 ## 行为准则
 
-- 自然对话，像一个真实的群成员一样参与讨论
-- 仔细阅读聊天历史，理解当前讨论的上下文和语境
-- 在群聊中注意区分谁在说话、谁被@了、谁在和谁对话
-- 如果历史记录中有人提到了某个话题，用户的问题很可能与此相关
-- 直接回答问题或执行任务，不要解释你是怎么工作的
+- 你是同事，不是客服。自然、直接、有个性
+- 读 [User profile] 了解这个人，按他的偏好回复
+- 在群聊中注意区分谁在说话、谁在和谁对话
+- 直接做事，不要解释你是怎么工作的
 """
 
 # 群聊历史拉取条数
@@ -116,6 +131,10 @@ class AgentDispatcher:
         self._cron_tools = make_cron_tools(lambda: self._cron_scheduler)
         self._feishu_tools = make_feishu_tools(lambda: self._channel)
         self._skill_tools = make_skill_tools(self._on_skill_changed)
+        self._user_memory = UserMemoryStore(
+            base_dir=str(Path(db_path).parent) if db_path else None
+        )
+        self._user_memory_tools = make_user_memory_tools(lambda: self._user_memory)
         # 确保 managed skills 目录存在（Cody SDK 扫描时需要）
         Path(_MANAGED_SKILLS_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -188,6 +207,8 @@ class AgentDispatcher:
                 for tool in self._feishu_tools:
                     builder = builder.tool(tool)
                 for tool in self._skill_tools:
+                    builder = builder.tool(tool)
+                for tool in self._user_memory_tools:
                     builder = builder.tool(tool)
                 builder = self._apply_cody_config(builder, self._cody_config)
                 # 每个 Agent 的 api_key/base_url 优先级高于全局 cody 配置
@@ -288,8 +309,14 @@ class AgentDispatcher:
 
         context_parts = [
             f"[Feishu context] chat_id={msg.chat_id} message_id={msg.message_id} "
-            f"chat_type={msg.chat_type} sender_name={msg.sender_name}{mentions_str}",
+            f"chat_type={msg.chat_type} sender_id={msg.sender_id} "
+            f"sender_name={msg.sender_name}{mentions_str}",
         ]
+
+        # 注入当前用户的持久化记忆（跨群、跨 agent）
+        user_profile = self._user_memory.get_for_prompt(msg.sender_id)
+        if user_profile:
+            context_parts.append(user_profile)
 
         # 群聊时拉取最近聊天记录，注入为上下文
         if msg.chat_type == "group":

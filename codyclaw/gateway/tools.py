@@ -348,3 +348,51 @@ def make_skill_tools(on_skill_changed):
         return f"Skill '{name}' removed. Change takes effect on the next message."
 
     return [install_skill, list_skills, remove_skill]
+
+
+def make_user_memory_tools(get_user_memory_store):
+    """Return tools for AI to read/write per-user memory.
+
+    `get_user_memory_store` is a zero-arg callable returning the UserMemoryStore.
+    """
+
+    async def save_user_memory(ctx, user_id: str, content: str) -> str:
+        """Save a note about a specific user. This persists across all conversations.
+
+        Call this PROACTIVELY when you learn something about the user, such as:
+        - Their role, team, or responsibilities
+        - Communication preferences (brief vs detailed, language, format)
+        - Ongoing projects or tasks they're working on
+        - Relationships (who they collaborate with, who their manager is)
+        - Personal preferences or recurring requests
+
+        Keep each entry concise — one fact per call. Prefer actionable notes.
+
+        Args:
+            user_id: The user's open_id (from Feishu context sender_id or mentions).
+            content: The note to remember about this user.
+        """
+        store = get_user_memory_store()
+        if store is None:
+            return "Error: User memory store is not available."
+        if not content.strip():
+            return "Error: content must not be empty."
+        count = store.add(user_id, content)
+        return f"Saved. ({count} entries total for this user)"
+
+    async def get_user_memory(ctx, user_id: str) -> str:
+        """Retrieve all saved notes about a specific user.
+
+        Args:
+            user_id: The user's open_id.
+        """
+        store = get_user_memory_store()
+        if store is None:
+            return "Error: User memory store is not available."
+        entries = store.get_all(user_id)
+        if not entries:
+            return f"No memory entries for user {user_id}."
+        items = [{"content": e.content, "created_at": e.created_at} for e in entries]
+        return json.dumps(items, ensure_ascii=False, indent=2)
+
+    return [save_user_memory, get_user_memory]
