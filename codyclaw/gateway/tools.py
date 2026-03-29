@@ -7,7 +7,9 @@
 import json
 import logging
 import re
+import shutil
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -226,3 +228,171 @@ def make_cron_tools(get_scheduler):
         return f"Task '{task_id}' not found."
 
     return [create_cron_task, list_cron_tasks, delete_cron_task]
+
+
+def _managed_skills_dir() -> Path:
+    """返回用户可写的 managed skill 目录（~/.codyclaw/skills/）。"""
+    d = Path.home() / ".codyclaw" / "skills"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def make_skill_tools(on_skill_changed):
+    """Return tools for AI to create/list/remove skills.
+
+    `on_skill_changed` is an async callback invoked after install/remove
+    so the dispatcher can invalidate cached clients.
+    """
+
+    async def install_skill(
+        ctx,
+        name: str,
+        description: str,
+        content: str,
+    ) -> str:
+        """Create and install a new skill. The skill becomes active on the next message.
+
+        A skill teaches the AI new capabilities or behavioral patterns via
+        a SKILL.md instruction file. Use this to extend your own abilities.
+
+        Args:
+            name: Skill name, lowercase with hyphens (e.g. "code-reviewer").
+            description: One-line description of what the skill does.
+            content: The full Markdown body of the SKILL.md (instructions,
+                     tool descriptions, examples, guidelines). Do NOT include
+                     the YAML frontmatter — it is generated automatically.
+        """
+        name = re.sub(r'[^a-z0-9\-]', '-', name.lower().strip())
+        name = re.sub(r'-{2,}', '-', name).strip('-')  # 合并连续连字符，去首尾
+        if not name or not re.match(r'^[a-z0-9][a-z0-9-]*$', name):
+            return "Error: invalid skill name. Use lowercase letters, digits, and hyphens."
+
+        # 确保 description 是干净的单行文本（防止 YAML 注入）
+        description = description.replace("\n", " ").replace("\r", " ").strip()
+        description = description.replace('"', '\\"')  # 转义双引号
+
+        skill_dir = _managed_skills_dir() / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+
+        # 用引号包裹 description，防止冒号等 YAML 特殊字符
+        frontmatter = (
+            f"---\n"
+            f"name: {name}\n"
+            f'description: "{description}"\n'
+            f"---\n\n"
+        )
+        skill_path = skill_dir / "SKILL.md"
+        skill_path.write_text(frontmatter + content, encoding="utf-8")
+
+        await on_skill_changed()
+        return (
+            f"Skill '{name}' installed at {skill_path}. "
+            f"It will be active on the next message."
+        )
+
+    async def list_skills(ctx) -> str:
+        """List all installed skills (both built-in and user-installed)."""
+        builtin_dir = Path(__file__).parent.parent / "skills"
+        managed_dir = _managed_skills_dir()
+
+        skills = []
+        for d in [builtin_dir, managed_dir]:
+            if not d.exists():
+                continue
+            for skill_dir in sorted(d.iterdir()):
+                if not skill_dir.is_dir():
+                    continue
+                skill_md = skill_dir / "SKILL.md"
+                if skill_md.exists():
+                    source = "built-in" if d == builtin_dir else "installed"
+                    # 读取 description from frontmatter
+                    desc = ""
+                    for line in skill_md.read_text(encoding="utf-8").splitlines():
+                        if line.startswith("description:"):
+                            desc = line.split(":", 1)[1].strip()
+                            break
+                    skills.append({
+                        "name": skill_dir.name,
+                        "source": source,
+                        "description": desc,
+                    })
+
+        if not skills:
+            return "No skills installed."
+        return json.dumps(skills, ensure_ascii=False, indent=2)
+
+    async def remove_skill(ctx, name: str) -> str:
+        """Remove a user-installed skill. Built-in skills cannot be removed.
+
+        Args:
+            name: The skill name to remove.
+        """
+        # 校验名称，防止路径穿越
+        if not re.match(r'^[a-z0-9][a-z0-9-]*$', name):
+            return "Error: invalid skill name."
+
+        skill_dir = _managed_skills_dir() / name
+        # 确保解析后的路径仍在 managed 目录内
+        try:
+            skill_dir.resolve().relative_to(_managed_skills_dir().resolve())
+        except ValueError:
+            return "Error: invalid skill path."
+
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            return f"Skill '{name}' not found in installed skills."
+
+        shutil.rmtree(skill_dir)
+
+        await on_skill_changed()
+        return f"Skill '{name}' removed. Change takes effect on the next message."
+
+    return [install_skill, list_skills, remove_skill]
+
+
+def make_user_memory_tools(get_user_memory_store):
+    """Return tools for AI to read/write per-user memory.
+
+    `get_user_memory_store` is a zero-arg callable returning the UserMemoryStore.
+    """
+
+    async def save_user_memory(ctx, user_id: str, content: str) -> str:
+        """Save a note about a specific user. This persists across all conversations.
+
+        Call this PROACTIVELY when you learn something about the user, such as:
+        - Their role, team, or responsibilities
+        - Communication preferences (brief vs detailed, language, format)
+        - Ongoing projects or tasks they're working on
+        - Relationships (who they collaborate with, who their manager is)
+        - Personal preferences or recurring requests
+
+        Keep each entry concise — one fact per call. Prefer actionable notes.
+
+        Args:
+            user_id: The user's open_id (from Feishu context sender_id or mentions).
+            content: The note to remember about this user.
+        """
+        store = get_user_memory_store()
+        if store is None:
+            return "Error: User memory store is not available."
+        if not content.strip():
+            return "Error: content must not be empty."
+        count = store.add(user_id, content)
+        return f"Saved. ({count} entries total for this user)"
+
+    async def get_user_memory(ctx, user_id: str) -> str:
+        """Retrieve all saved notes about a specific user.
+
+        Args:
+            user_id: The user's open_id.
+        """
+        store = get_user_memory_store()
+        if store is None:
+            return "Error: User memory store is not available."
+        entries = store.get_all(user_id)
+        if not entries:
+            return f"No memory entries for user {user_id}."
+        items = [{"content": e.content, "created_at": e.created_at} for e in entries]
+        return json.dumps(items, ensure_ascii=False, indent=2)
+
+    return [save_user_memory, get_user_memory]

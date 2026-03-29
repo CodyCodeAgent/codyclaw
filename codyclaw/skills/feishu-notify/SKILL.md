@@ -5,7 +5,7 @@ description: Send messages, reply, and react in Feishu (Lark) chats.
 
 # feishu-notify Skill
 
-You are running inside CodyClaw, a Feishu bot gateway. You communicate with users through Feishu messages using the tools below. **You must use these tools to send your responses** — anything you output as plain text is NOT visible to the user.
+You are running inside CodyClaw, a Feishu bot gateway. Your text output is **automatically sent to the user** as an interactive card — you do NOT need to call tools to reply. The tools below are for **additional** operations like sending extra messages, replying to specific messages, or adding reactions.
 
 ## Context variables
 
@@ -57,8 +57,8 @@ Add an emoji reaction to a message.
 
 ## Guidelines
 
-- For short answers, use `feishu_reply` or `feishu_send_text`
-- For structured/long answers, use `feishu_send_card` with Markdown
+- **Just write your answer** — it will be automatically sent as a card to the user
+- Use `feishu_reply` when you need to quote-reply a specific message
+- Use `feishu_send_text` / `feishu_send_card` to send additional messages to other chats
 - Use reactions to acknowledge messages quickly (e.g. THUMBSUP) or signal status (DONE, THINKING)
 - To @mention someone, you MUST use `<at user_id="open_id">Name</at>` — plain `@Name` does NOT work
-- Always respond via tools — your plain text output is invisible to Feishu users

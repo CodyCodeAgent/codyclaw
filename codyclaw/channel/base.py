@@ -77,3 +77,13 @@ class LarkChannel(ABC):
     @abstractmethod
     async def remove_reaction(self, message_id: str, reaction_id: str) -> None:
         """移除消息上的表情回应"""
+
+    @abstractmethod
+    async def fetch_chat_history(
+        self, chat_id: str, count: int = 10, before_message_id: Optional[str] = None
+    ) -> list[dict]:
+        """拉取群聊最近的消息历史（用于注入上下文）。
+
+        返回 list[dict]，每条包含 sender_name, content, msg_type, create_time。
+        按时间正序排列（最早的在前）。
+        """

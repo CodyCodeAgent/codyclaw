@@ -199,15 +199,18 @@ def _add_chat_message(
 # Skills
 # ---------------------------------------------------------------------------
 
-_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+_BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+_MANAGED_SKILLS_DIR = Path.home() / ".codyclaw" / "skills"
 
 
 @router.get("/skills")
 async def list_skills():
-    """列出所有可用的 Skill 及其 SKILL.md 内容。"""
+    """列出所有可用的 Skill 及其 SKILL.md 内容（含内置和用户安装的）。"""
     skills = []
-    if _SKILLS_DIR.exists():
-        for skill_dir in sorted(_SKILLS_DIR.iterdir()):
+    for source, base_dir in [("built-in", _BUILTIN_SKILLS_DIR), ("installed", _MANAGED_SKILLS_DIR)]:
+        if not base_dir.exists():
+            continue
+        for skill_dir in sorted(base_dir.iterdir()):
             if not skill_dir.is_dir():
                 continue
             skill_md = skill_dir / "SKILL.md"
@@ -217,6 +220,7 @@ async def list_skills():
             skills.append({
                 "name": skill_dir.name,
                 "content": content,
+                "source": source,
             })
     return {"skills": skills}
 

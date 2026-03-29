@@ -34,6 +34,12 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     content         TEXT NOT NULL,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS session_map (
+    session_key     TEXT PRIMARY KEY,
+    session_id      TEXT NOT NULL,
+    updated_at      REAL NOT NULL
+);
 """
 
 
@@ -115,6 +121,40 @@ def save_chat_message(db_path: str, msg: dict) -> None:
             ),
         )
 
+
+# ---------------------------------------------------------------------------
+# Session map (持久化 session_key → session_id 映射，重启后可恢复)
+# ---------------------------------------------------------------------------
+
+def save_session(db_path: str, session_key: str, session_id: str, updated_at: float) -> None:
+    """保存或更新 session 映射"""
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO session_map (session_key, session_id, updated_at) "
+            "VALUES (?, ?, ?)",
+            (session_key, session_id, updated_at),
+        )
+
+
+def load_sessions(db_path: str) -> list[dict]:
+    """加载所有 session 映射"""
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT session_key, session_id, updated_at FROM session_map"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_session(db_path: str, session_key: str) -> None:
+    """删除一条 session 映射"""
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM session_map WHERE session_key = ?", (session_key,))
+
+
+# ---------------------------------------------------------------------------
+# Chat messages
+# ---------------------------------------------------------------------------
 
 def load_chat_messages(
     db_path: str,
