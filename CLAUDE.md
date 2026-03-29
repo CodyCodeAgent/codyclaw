@@ -41,13 +41,14 @@ make check
 
 Six-layer design, all async (asyncio):
 
-1. **Channel Layer** (`codyclaw/channel/`) — Feishu WebSocket adapter. Lark SDK runs in a separate thread, bridged to asyncio via `run_coroutine_threadsafe()`.
+1. **Channel Layer** (`codyclaw/channel/`) — Feishu WebSocket adapter. Lark SDK runs in a separate thread, bridged to asyncio via `run_coroutine_threadsafe()`. `cards.py` builds Feishu interactive cards for streaming agent output (running/done/error states, 4096-char content limit with truncation).
 
 2. **Gateway Layer** (`codyclaw/gateway/`) — Message routing and agent dispatch.
    - `router.py`: Routes messages to agents based on chat type, user/group whitelists, and trigger mode (mention/all/prefix). `AgentConfig` supports per-agent `api_key` and `base_url` for third-party LLM providers.
    - `dispatcher.py`: Executes agents via Cody SDK streaming. Manages human-in-the-loop (message-based: user replies 允许/拒绝/全部允许) and throttles card updates (1.5s interval). Registers custom tools and skill directory when building each Cody client. Applies global and per-agent `api_key`/`base_url`/`enable_thinking` config.
    - `session_strategy.py`: Per-user (P2P) or per-group session persistence with 24-hour idle timeout.
    - `tools.py`: Custom tool factory (`make_cron_tools`) — closures over `CronScheduler` for create/list/delete operations.
+   - `user_memory.py`: File-based per-user persistent memory (`UserMemoryStore`). Stored at `~/.codyclaw/users/{user_id}.json`, capped at 100 entries (FIFO eviction). Injected into message context as a `[User profile]` block (≤1500 token budget). Crosses agents, groups, and sessions.
 
 3. **Automation Layer** (`codyclaw/automation/`) — Cron scheduler (APScheduler 3.x), pub/sub event bus, and BOOT.md startup script execution.
 

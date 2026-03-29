@@ -143,7 +143,10 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down CodyClaw Gateway...")
     await event_bus.emit(Event(type=EventType.GATEWAY_SHUTDOWN))
     cron.stop()
-    await dispatcher.shutdown()
+    try:
+        await asyncio.wait_for(dispatcher.shutdown(), timeout=5.0)
+    except asyncio.TimeoutError:
+        logger.warning("dispatcher.shutdown() timed out after 5s — forcing exit")
     await channel.stop()
 
 
@@ -188,11 +191,104 @@ def create_app(config: CodyClawConfig, config_path: str = "") -> FastAPI:
             tasks.append({
                 "id": task.task_id,
                 "name": task.name,
+                "agent_id": task.agent_id,
                 "schedule": task.schedule,
+                "prompt": task.prompt,
+                "notify_chat_id": task.notify_chat_id or "",
                 "enabled": task.enabled,
                 "next_run": next_run,
             })
         return {"tasks": tasks}
+
+    @app.post("/api/cron")
+    async def create_cron_task(req: Request):
+        import uuid
+        from codyclaw.automation.cron import CronScheduler, CronTask
+        cron: CronScheduler = req.app.state.cron
+        body = await req.json()
+
+        task_id = (body.get("task_id") or "").strip() or f"task-{uuid.uuid4().hex[:8]}"
+        name = (body.get("name") or "").strip()
+        agent_id = (body.get("agent_id") or "").strip()
+        prompt = (body.get("prompt") or "").strip()
+        schedule = (body.get("schedule") or "").strip()
+
+        if not name or not agent_id or not prompt or not schedule:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                {"error": "name, agent_id, prompt, schedule are required"}, status_code=400
+            )
+
+        task = CronTask(
+            task_id=task_id,
+            name=name,
+            agent_id=agent_id,
+            prompt=prompt,
+            schedule=schedule,
+            notify_chat_id=(body.get("notify_chat_id") or "") or None,
+            enabled=bool(body.get("enabled", True)),
+        )
+        try:
+            cron.add_task(task, persist=True)
+        except Exception as e:
+            # add_task may have already inserted the task into _tasks / DB before the
+            # schedule parsing failed — clean up to avoid a permanently broken state.
+            cron.remove_task(task_id)
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": f"Invalid schedule: {e}"}, status_code=400)
+        return {"status": "ok", "task_id": task_id}
+
+    @app.put("/api/cron/{task_id}")
+    async def update_cron_task(task_id: str, req: Request):
+        from codyclaw.automation.cron import CronScheduler
+        cron: CronScheduler = req.app.state.cron
+        body = await req.json()
+
+        updates = {}
+        for field in ("name", "agent_id", "prompt", "schedule", "notify_chat_id", "enabled"):
+            if field in body:
+                updates[field] = body[field]
+
+        try:
+            ok = cron.update_task(task_id, **updates)
+        except Exception as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": f"Invalid schedule: {e}"}, status_code=400)
+        if not ok:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": f"Task '{task_id}' not found"}, status_code=404)
+        return {"status": "ok"}
+
+    @app.get("/api/cron/{task_id}/runs")
+    async def get_cron_runs(task_id: str, req: Request):
+        from codyclaw.db import load_cron_runs
+        db_path = req.app.state.config.db_path
+        if not db_path:
+            return {"runs": []}
+        runs = load_cron_runs(db_path, task_id)
+        return {"runs": runs}
+
+    @app.post("/api/cron/{task_id}/run")
+    async def run_cron_task_now(task_id: str, req: Request):
+        import asyncio
+        from codyclaw.automation.cron import CronScheduler
+        cron: CronScheduler = req.app.state.cron
+        task = cron.tasks.get(task_id)
+        if not task:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": f"Task '{task_id}' not found"}, status_code=404)
+        asyncio.create_task(cron._execute_task(task))
+        return {"status": "ok", "message": f"Task '{task.name}' triggered."}
+
+    @app.delete("/api/cron/{task_id}")
+    async def delete_cron_task_endpoint(task_id: str, req: Request):
+        from codyclaw.automation.cron import CronScheduler
+        cron: CronScheduler = req.app.state.cron
+        removed = cron.remove_task(task_id)
+        if not removed:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": f"Task '{task_id}' not found"}, status_code=404)
+        return {"status": "ok"}
 
     @app.get("/api/sessions")
     async def list_sessions(req: Request):

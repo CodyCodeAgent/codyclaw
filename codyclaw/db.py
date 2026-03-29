@@ -6,7 +6,7 @@
 import logging
 import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from codyclaw.automation.cron import CronTask
@@ -14,6 +14,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DDL = """
+CREATE TABLE IF NOT EXISTS cron_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id     TEXT NOT NULL,
+    task_name   TEXT NOT NULL,
+    started_at  REAL NOT NULL,
+    duration_s  REAL NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL,
+    output      TEXT,
+    error       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cron_runs_task ON cron_runs (task_id, started_at DESC);
+
 CREATE TABLE IF NOT EXISTS cron_tasks (
     task_id         TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
@@ -98,6 +110,42 @@ def delete_cron_task(db_path: str, task_id: str) -> None:
     """删除一条 cron 任务"""
     with sqlite3.connect(db_path) as conn:
         conn.execute("DELETE FROM cron_tasks WHERE task_id = ?", (task_id,))
+
+
+# ---------------------------------------------------------------------------
+# Cron run history
+# ---------------------------------------------------------------------------
+
+def save_cron_run(
+    db_path: str,
+    task_id: str,
+    task_name: str,
+    started_at: float,
+    duration_s: float,
+    status: str,
+    output: Optional[str] = None,
+    error: Optional[str] = None,
+) -> None:
+    """记录一次 cron 任务执行结果"""
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO cron_runs "
+            "(task_id, task_name, started_at, duration_s, status, output, error) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (task_id, task_name, started_at, round(duration_s, 2), status, output, error),
+        )
+
+
+def load_cron_runs(db_path: str, task_id: str, limit: int = 30) -> list[dict]:
+    """读取某个任务的最近执行记录，按时间倒序"""
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, task_id, task_name, started_at, duration_s, status, output, error "
+            "FROM cron_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT ?",
+            (task_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 # codyclaw/automation/cron.py
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -9,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from codyclaw.channel.cards import build_cron_result_card
-from codyclaw.db import delete_cron_task, save_cron_task
+from codyclaw.db import delete_cron_task, save_cron_run, save_cron_task
 
 if TYPE_CHECKING:
     from codyclaw.channel.base import LarkChannel
@@ -77,10 +78,15 @@ class CronScheduler:
     async def _execute_task(self, task: CronTask) -> None:
         """执行定时任务"""
         logger.info(f"Executing cron task: {task.name}")
+        started_at = time.time()
         try:
             agent_config = self._dispatcher.get_agent(task.agent_id)
             if not agent_config:
-                logger.error(f"Agent {task.agent_id} not found for cron task {task.name}")
+                msg = f"Agent '{task.agent_id}' not found"
+                logger.error(f"Cron task {task.name}: {msg}")
+                if self._db_path:
+                    save_cron_run(self._db_path, task.task_id, task.name,
+                                  started_at, time.time() - started_at, "error", None, msg)
                 return
 
             client = await self._dispatcher.get_or_create_client(agent_config)
@@ -95,23 +101,82 @@ class CronScheduler:
             if result.session_id:
                 self._dispatcher.set_session(session_key, result.session_id)
 
-            # 推送结果到飞书
+            # 记录执行结果（在飞书推送之前，避免推送失败污染运行状态）
+            if self._db_path:
+                output = (result.output or "")[:2000] or None
+                save_cron_run(self._db_path, task.task_id, task.name,
+                              started_at, time.time() - started_at, "success", output, None)
+
+            # 推送结果到飞书（失败只记日志，不影响运行记录）
             if task.notify_chat_id and result.output:
-                next_run = self._scheduler.get_job(task.task_id).next_run_time
-                card = build_cron_result_card(
-                    task_name=task.name,
-                    result=result.output,
-                    next_run=next_run.strftime("%Y-%m-%d %H:%M") if next_run else "未知",
-                )
-                await self._channel.send_card(task.notify_chat_id, card)
+                try:
+                    next_run = self._scheduler.get_job(task.task_id).next_run_time
+                    card = build_cron_result_card(
+                        task_name=task.name,
+                        result=result.output,
+                        next_run=next_run.strftime("%Y-%m-%d %H:%M") if next_run else "未知",
+                    )
+                    await self._channel.send_card(task.notify_chat_id, card)
+                except Exception as notify_err:
+                    logger.warning(f"Cron task {task.name}: failed to send Feishu notification: {notify_err}")
 
         except Exception as e:
             logger.exception(f"Cron task {task.name} failed: {e}")
+            if self._db_path:
+                save_cron_run(self._db_path, task.task_id, task.name,
+                              started_at, time.time() - started_at, "error", None, str(e)[:1000])
             if task.notify_chat_id:
-                await self._channel.send_text(
-                    task.notify_chat_id,
-                    f"⚠️ 定时任务 [{task.name}] 执行失败: {str(e)}",
-                )
+                try:
+                    await self._channel.send_text(
+                        task.notify_chat_id,
+                        f"⚠️ 定时任务 [{task.name}] 执行失败: {str(e)}",
+                    )
+                except Exception as notify_err:
+                    logger.warning(f"Cron task {task.name}: failed to send error notification: {notify_err}")
+
+    def update_task(self, task_id: str, **kwargs) -> bool:
+        """Update fields of an existing task and reschedule it. Returns False if not found.
+        Raises ValueError if the new schedule expression is invalid (state is not mutated).
+        """
+        if task_id not in self._tasks:
+            return False
+        task = self._tasks[task_id]
+
+        # Validate the new schedule BEFORE touching any state.
+        new_schedule = kwargs.get("schedule", task.schedule)
+        new_enabled = kwargs.get("enabled", task.enabled)
+        trigger = None
+        if new_enabled:
+            schedule_lower = new_schedule.lower()
+            if (
+                "every" in schedule_lower
+                or new_schedule.isdigit()
+                or schedule_lower.endswith(("h", "m"))
+            ):
+                trigger = IntervalTrigger(minutes=self._parse_interval(new_schedule))
+            else:
+                # Raises ValueError for invalid cron expression — no state has changed yet.
+                trigger = CronTrigger.from_crontab(new_schedule, timezone=task.timezone)
+
+        # Schedule is valid (or task is being disabled). Now mutate state.
+        for k, v in kwargs.items():
+            if hasattr(task, k):
+                setattr(task, k, v)
+        if self._db_path:
+            save_cron_task(self._db_path, task)
+        job = self._scheduler.get_job(task_id)
+        if job:
+            job.remove()
+        if trigger is not None:
+            self._scheduler.add_job(
+                self._execute_task,
+                trigger=trigger,
+                id=task.task_id,
+                args=[task],
+                name=task.name,
+                replace_existing=True,
+            )
+        return True
 
     def remove_task(self, task_id: str) -> bool:
         """删除定时任务，返回是否找到并删除"""

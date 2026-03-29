@@ -321,21 +321,227 @@ async function loadCron() {
     const data = await fetchJSON(`${API}/cron`);
     const el = document.getElementById('cron-list');
     if (data.tasks.length === 0) {
-      el.innerHTML = '<p class="empty-state">No cron tasks.</p>';
+      el.innerHTML = '<p class="empty-state">No cron tasks. Click "+ New Task" to create one.</p>';
       return;
     }
     el.innerHTML = `<table>
-      <thead><tr><th>ID</th><th>Name</th><th>Schedule</th><th>Status</th><th>Next Run</th></tr></thead>
+      <thead><tr><th>Name</th><th>Agent</th><th>Schedule</th><th>Prompt</th><th>Status</th><th>Next Run</th><th></th></tr></thead>
       <tbody>${data.tasks.map(t => `
         <tr>
-          <td><code>${esc(t.id)}</code></td>
-          <td>${esc(t.name)}</td>
+          <td><strong>${esc(t.name)}</strong><br><code style="font-size:11px;color:var(--text-secondary)">${esc(t.id)}</code></td>
+          <td><code>${esc(t.agent_id)}</code></td>
           <td><code>${esc(t.schedule)}</code></td>
+          <td style="max-width:260px;white-space:pre-wrap;word-break:break-word;font-size:13px;color:var(--text-secondary)">${esc(t.prompt.length > 120 ? t.prompt.slice(0, 120) + '…' : t.prompt)}</td>
           <td>${t.enabled ? '<span class="badge badge-success">Enabled</span>' : '<span class="badge badge-muted">Disabled</span>'}</td>
-          <td>${esc(t.next_run || '-')}</td>
+          <td style="white-space:nowrap">${esc(t.next_run || '-')}</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm" onclick="runCronTask('${esc(t.id)}', '${esc(t.name)}', this)">Run</button>
+            <button class="btn btn-sm" style="margin-left:4px" onclick="showCronHistory('${esc(t.id)}', '${esc(t.name)}')">History</button>
+            <button class="btn btn-sm" style="margin-left:4px" onclick="openCronModal(${JSON.stringify(t).replace(/"/g, '&quot;')})">Edit</button>
+            <button class="btn btn-sm btn-danger" style="margin-left:4px" onclick="deleteCronTask('${esc(t.id)}', '${esc(t.name)}')">Delete</button>
+          </td>
         </tr>`).join('')}
       </tbody></table>`;
   } catch (e) { console.error('Cron load error:', e); }
+}
+
+function openCronModal(task) {
+  const isNew = !task;
+  document.getElementById('cron-modal-title').textContent = isNew ? 'New Cron Task' : 'Edit Cron Task';
+  document.getElementById('cron-edit-id').value = isNew ? '' : task.id;
+  document.getElementById('cron-edit-task-id').value = isNew ? '' : task.id;
+  document.getElementById('cron-edit-task-id').disabled = !isNew;
+  document.getElementById('cron-edit-name').value = isNew ? '' : task.name;
+  document.getElementById('cron-edit-agent-id').value = isNew ? '' : task.agent_id;
+  document.getElementById('cron-edit-schedule').value = isNew ? '' : task.schedule;
+  document.getElementById('cron-edit-prompt').value = isNew ? '' : task.prompt;
+  document.getElementById('cron-edit-notify').value = isNew ? '' : (task.notify_chat_id || '');
+  document.getElementById('cron-edit-enabled').checked = isNew ? true : task.enabled;
+  document.getElementById('cron-modal-msg').textContent = '';
+  document.getElementById('cron-modal').style.display = 'flex';
+}
+
+function closeCronModal() {
+  document.getElementById('cron-modal').style.display = 'none';
+}
+
+document.getElementById('cron-new-btn').addEventListener('click', () => openCronModal(null));
+document.getElementById('cron-modal-close').addEventListener('click', closeCronModal);
+document.getElementById('cron-modal-cancel').addEventListener('click', closeCronModal);
+document.getElementById('cron-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('cron-modal')) closeCronModal();
+});
+
+document.getElementById('cron-modal-save').addEventListener('click', async () => {
+  const msg = document.getElementById('cron-modal-msg');
+  const btn = document.getElementById('cron-modal-save');
+  const editId = document.getElementById('cron-edit-id').value;
+  const isNew = !editId;
+
+  const payload = {
+    task_id: document.getElementById('cron-edit-task-id').value.trim(),
+    name: document.getElementById('cron-edit-name').value.trim(),
+    agent_id: document.getElementById('cron-edit-agent-id').value.trim(),
+    schedule: document.getElementById('cron-edit-schedule').value.trim(),
+    prompt: document.getElementById('cron-edit-prompt').value.trim(),
+    notify_chat_id: document.getElementById('cron-edit-notify').value.trim(),
+    enabled: document.getElementById('cron-edit-enabled').checked,
+  };
+
+  if (!payload.name || !payload.agent_id || !payload.schedule || !payload.prompt) {
+    msg.style.color = 'var(--danger)';
+    msg.textContent = 'Name, Agent ID, Schedule, Prompt are required.';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  msg.textContent = '';
+
+  try {
+    const url = isNew ? `${API}/cron` : `${API}/cron/${encodeURIComponent(editId)}`;
+    const method = isNew ? 'POST' : 'PUT';
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      closeCronModal();
+      loadCron();
+    } else {
+      msg.style.color = 'var(--danger)';
+      msg.textContent = data.error || 'Save failed';
+    }
+  } catch (e) {
+    msg.style.color = 'var(--danger)';
+    msg.textContent = `Error: ${e.message}`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Save';
+});
+
+// ---------------------------------------------------------------------------
+// Cron History modal — with live polling after manual run
+// ---------------------------------------------------------------------------
+let _cronHistoryPollTimer = null;
+
+function _stopCronHistoryPoll() {
+  if (_cronHistoryPollTimer) {
+    clearInterval(_cronHistoryPollTimer);
+    _cronHistoryPollTimer = null;
+  }
+}
+
+function _renderHistoryTable(runs, pendingRow) {
+  const rows = runs.map(r => {
+    const dt = new Date(r.started_at * 1000).toLocaleString('zh-CN', {hour12: false});
+    const dur = r.duration_s < 60
+      ? `${r.duration_s.toFixed(1)}s`
+      : `${Math.floor(r.duration_s / 60)}m ${(r.duration_s % 60).toFixed(0)}s`;
+    const isOk = r.status === 'success';
+    const badge = isOk
+      ? '<span class="badge badge-success">success</span>'
+      : '<span class="badge" style="background:#fee2e2;color:#991b1b">error</span>';
+    const detail = esc(isOk ? (r.output || '(no output)') : (r.error || '(unknown error)'));
+    return `<tr>
+      <td style="white-space:nowrap">${esc(dt)}</td>
+      <td style="white-space:nowrap">${esc(dur)}</td>
+      <td>${badge}</td>
+      <td style="max-width:340px;white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--text-secondary)">${detail}</td>
+    </tr>`;
+  }).join('');
+  return `<table style="font-size:13px">
+    <thead><tr><th>Time</th><th>Duration</th><th>Status</th><th>Output / Error</th></tr></thead>
+    <tbody>${pendingRow || ''}${rows}</tbody></table>`;
+}
+
+// highlightAfter: unix timestamp (seconds) — if set, poll until a run with started_at >= this appears
+async function showCronHistory(taskId, taskName, highlightAfter) {
+  _stopCronHistoryPoll();
+  document.getElementById('cron-history-title').textContent = `Run History — ${taskName}`;
+  const content = document.getElementById('cron-history-content');
+  content.innerHTML = '<p style="color:var(--text-secondary);font-size:13px">Loading...</p>';
+  document.getElementById('cron-history-modal').style.display = 'flex';
+
+  async function refresh() {
+    try {
+      const data = await fetchJSON(`${API}/cron/${encodeURIComponent(taskId)}/runs`);
+      const newEntry = highlightAfter ? data.runs.find(r => r.started_at >= highlightAfter) : null;
+      const stillRunning = highlightAfter && !newEntry;
+
+      const pendingRow = stillRunning ? `<tr>
+        <td style="white-space:nowrap">${esc(new Date(highlightAfter * 1000).toLocaleString('zh-CN', {hour12: false}))}</td>
+        <td>—</td>
+        <td><span class="badge" style="background:#fef3c7;color:#92400e">running…</span></td>
+        <td style="font-size:12px;color:var(--text-secondary)">Waiting for result…</td>
+      </tr>` : null;
+
+      if (data.runs.length === 0 && !pendingRow) {
+        content.innerHTML = '<p class="empty-state" style="padding:32px 0">No runs recorded yet.</p>';
+      } else {
+        content.innerHTML = _renderHistoryTable(data.runs, pendingRow);
+      }
+
+      if (!stillRunning) _stopCronHistoryPoll(); // got the result, stop polling
+    } catch (e) {
+      content.innerHTML = `<p style="color:var(--danger);font-size:13px">Failed to load: ${esc(e.message)}</p>`;
+      _stopCronHistoryPoll();
+    }
+  }
+
+  await refresh();
+  if (highlightAfter) {
+    _cronHistoryPollTimer = setInterval(refresh, 2000);
+  }
+}
+
+document.getElementById('cron-history-close').addEventListener('click', () => {
+  _stopCronHistoryPoll();
+  document.getElementById('cron-history-modal').style.display = 'none';
+});
+document.getElementById('cron-history-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('cron-history-modal')) {
+    _stopCronHistoryPoll();
+    document.getElementById('cron-history-modal').style.display = 'none';
+  }
+});
+
+async function runCronTask(taskId, taskName, btn) {
+  btn.disabled = true;
+  btn.textContent = '...';
+  const startedAt = Date.now() / 1000;
+  try {
+    const res = await fetch(`${API}/cron/${encodeURIComponent(taskId)}/run`, { method: 'POST' });
+    const data = await res.json();
+    btn.disabled = false;
+    btn.textContent = 'Run';
+    if (res.ok) {
+      showCronHistory(taskId, taskName, startedAt);
+    } else {
+      alert(data.error || 'Run failed');
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+    btn.disabled = false;
+    btn.textContent = 'Run';
+  }
+}
+
+async function deleteCronTask(taskId, taskName) {
+  if (!confirm(`Delete cron task "${taskName}"?`)) return;
+  try {
+    const res = await fetch(`${API}/cron/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+    if (res.ok) {
+      loadCron();
+    } else {
+      const data = await res.json();
+      alert(data.error || 'Delete failed');
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

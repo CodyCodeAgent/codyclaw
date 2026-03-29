@@ -136,13 +136,16 @@ def make_feishu_tools(get_channel):
     return [feishu_send_text, feishu_send_card, feishu_reply, feishu_add_reaction]
 
 
-def make_cron_tools(get_scheduler):
+def make_cron_tools(get_scheduler, get_router=None):
     """Return a list of cron-management tools.
 
     `get_scheduler` is a zero-argument callable that returns the live
     CronScheduler instance (or None if not yet initialised).  Using a
     getter instead of a direct reference lets us inject the scheduler
     after the dispatcher is constructed.
+
+    `get_router` is an optional zero-argument callable that returns the live
+    MessageRouter instance, used to validate agent_id on task creation.
     """
 
     async def create_cron_task(
@@ -159,7 +162,8 @@ def make_cron_tools(get_scheduler):
         Args:
             task_id: Unique identifier, lowercase with hyphens.
             name: Human-readable task name.
-            agent_id: ID of the agent that will execute the task.
+            agent_id: ID of the agent that will execute the task. Use list_cron_tasks or
+                      check the agent list to find valid IDs before creating a task.
             prompt: Instruction the agent runs on each execution.
             schedule: Cron expression (\"0 9 * * 1-5\") or interval (\"every 30m\", \"2h\").
             notify_chat_id: Feishu chat ID to send results to (optional).
@@ -167,6 +171,18 @@ def make_cron_tools(get_scheduler):
         scheduler: "CronScheduler" = get_scheduler()
         if scheduler is None:
             return "Error: CronScheduler is not available yet."
+
+        # Validate agent_id against registered agents
+        if get_router is not None:
+            router = get_router()
+            if router is not None:
+                valid_ids = [a.agent_id for a in router.iter_agents()]
+                if agent_id not in valid_ids:
+                    return (
+                        f"Error: agent '{agent_id}' not found. "
+                        f"Available agents: {valid_ids}. "
+                        f"Use one of these agent IDs."
+                    )
 
         from codyclaw.automation.cron import CronTask
 
@@ -290,7 +306,7 @@ def make_skill_tools(on_skill_changed):
             f"It will be active on the next message."
         )
 
-    async def list_skills(ctx) -> str:
+    async def list_installed_skills(ctx) -> str:
         """List all installed skills (both built-in and user-installed)."""
         builtin_dir = Path(__file__).parent.parent / "skills"
         managed_dir = _managed_skills_dir()
@@ -347,7 +363,7 @@ def make_skill_tools(on_skill_changed):
         await on_skill_changed()
         return f"Skill '{name}' removed. Change takes effect on the next message."
 
-    return [install_skill, list_skills, remove_skill]
+    return [install_skill, list_installed_skills, remove_skill]
 
 
 def make_user_memory_tools(get_user_memory_store):
