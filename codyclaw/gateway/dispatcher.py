@@ -72,6 +72,9 @@ open_id 可从 [Feishu context] 的 mentions 字段或 [Recent chat history] 中
 # 群聊历史拉取条数
 _GROUP_HISTORY_COUNT = 15
 
+# AI 主动发消息的工具名集合（用于判断是否需要兜底卡片）
+_FEISHU_MESSAGE_TOOLS = {"feishu_send_text", "feishu_send_card", "feishu_reply"}
+
 
 @dataclass
 class ActiveRun:
@@ -113,6 +116,8 @@ class AgentDispatcher:
         self._cron_tools = make_cron_tools(lambda: self._cron_scheduler)
         self._feishu_tools = make_feishu_tools(lambda: self._channel)
         self._skill_tools = make_skill_tools(self._on_skill_changed)
+        # 确保 managed skills 目录存在（Cody SDK 扫描时需要）
+        Path(_MANAGED_SKILLS_DIR).mkdir(parents=True, exist_ok=True)
 
     # -------------------------------------------------------------------------
     # Client 管理
@@ -291,8 +296,11 @@ class AgentDispatcher:
             history = await self._fetch_history_safe(msg.chat_id, msg.message_id)
             if history:
                 context_parts.append(self._format_chat_history(history))
-
-        context_parts.append(f"{msg.sender_name}: {msg.content}")
+            # 群聊带 sender_name 前缀，区分谁在说话
+            context_parts.append(f"{msg.sender_name}: {msg.content}")
+        else:
+            # P2P 不需要前缀，上下文已经是单人对话
+            context_parts.append(msg.content)
         context = "\n\n".join(context_parts)
 
         try:
@@ -306,10 +314,8 @@ class AgentDispatcher:
                     await self._update_streaming_card(run, msg)
 
                 elif isinstance(chunk, ToolCallChunk):
-                    # 跟踪是否调了飞书发消息工具（send_text/send_card/reply 都算）
-                    if chunk.tool_name and chunk.tool_name.startswith(
-                        ("feishu_send", "feishu_reply")
-                    ):
+                    # 跟踪是否调了飞书发消息工具
+                    if chunk.tool_name in _FEISHU_MESSAGE_TOOLS:
                         run.has_sent_feishu_message = True
                     run.tool_calls.append(chunk.tool_name or "unknown")
                     await self._emit(EventType.AGENT_TOOL_CALL, {

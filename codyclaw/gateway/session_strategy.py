@@ -48,15 +48,25 @@ class SessionManager:
             return
         now = time.time()
         restored = 0
+        expired_keys = []
         for row in rows:
             key = row["session_key"]
             updated_at = row["updated_at"]
-            # 跳过已超时的 session
             if now - updated_at > self._idle_timeout:
+                expired_keys.append(key)
                 continue
             self._session_map[key] = row["session_id"]
             self._last_active[key] = updated_at
             restored += 1
+        # 清理 DB 中过期的条目
+        if expired_keys:
+            from codyclaw.db import delete_session
+            for key in expired_keys:
+                try:
+                    delete_session(self._db_path, key)
+                except Exception:
+                    pass
+            logger.info(f"Cleaned up {len(expired_keys)} expired sessions from DB")
         if restored:
             logger.info(f"Restored {restored} sessions from DB")
 

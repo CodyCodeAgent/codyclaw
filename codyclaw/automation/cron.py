@@ -85,11 +85,15 @@ class CronScheduler:
 
             client = await self._dispatcher.get_or_create_client(agent_config)
 
-            # 复用同一 session，让 AI 记住上次执行的结果和上下文
-            result = await client.run(
-                task.prompt,
-                session_id=f"cron-{task.task_id}",
-            )
+            # 通过 dispatcher 的 SessionManager 持久化 cron session
+            session_key = f"cron:{task.task_id}"
+            session_id = self._dispatcher.get_session(session_key)
+
+            result = await client.run(task.prompt, session_id=session_id)
+
+            # 保存返回的 session_id（首次创建或 Cody 内部变更时）
+            if result.session_id:
+                self._dispatcher.set_session(session_key, result.session_id)
 
             # 推送结果到飞书
             if task.notify_chat_id and result.output:
