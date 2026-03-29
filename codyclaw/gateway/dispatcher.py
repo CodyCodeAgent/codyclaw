@@ -108,7 +108,7 @@ class AgentDispatcher:
         self._active_runs: dict[str, ActiveRun] = {}           # user_id → ActiveRun
         self._clients: dict[str, AsyncCodyClient] = {}          # agent_id → client
         self._client_locks: dict[str, asyncio.Lock] = {}        # agent_id → Lock（防竞态）
-        self._sessions = SessionManager()                       # 会话生命周期管理
+        self._sessions = SessionManager(db_path=db_path)          # 会话生命周期管理（持久化到 DB）
         self._cron_scheduler: Optional["CronScheduler"] = None
         self._cron_tools = make_cron_tools(lambda: self._cron_scheduler)
         self._feishu_tools = make_feishu_tools(lambda: self._channel)
